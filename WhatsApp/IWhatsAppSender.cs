@@ -1,4 +1,4 @@
-﻿namespace PatchlabTwilioBot.WhatsApp;
+﻿namespace PatchlabWhatsAppBot.WhatsApp;
 
 public interface IWhatsAppSender
 {

@@ -1,8 +1,8 @@
-# PatchlabTwilioBot
+# PatchlabWhatsAppBot
 
 A WhatsApp auto-response bot for [Patchlab](https://github.com/) (IT support & web dev), built on ASP.NET Core and Meta's WhatsApp Cloud API.
 
-> **Note on the name:** the project started life as a Twilio Sandbox proof of concept (hence `PatchlabTwilioBot`), then migrated fully to Meta's Cloud API to avoid Twilio's per-message markup. Twilio is no longer used anywhere in the codebase — the name just stuck.
+> **Note on the name:** the project started life as a Twilio Sandbox proof of concept, then migrated fully to Meta's Cloud API to avoid Twilio's per-message markup. Twilio is no longer used anywhere in the codebase.
 
 ## What it does
 
@@ -30,7 +30,7 @@ The bot runs a simple state-machine conversation per phone number and replies au
 ## Project structure
 
 ```
-PatchlabTwilioBot/
+PatchlabWhatsAppBot/
 ├── Controllers/
 │   └── WhatsAppWebhookController.cs   # GET verification handshake + POST message handling
 ├── Conversations/
@@ -92,4 +92,4 @@ PatchlabTwilioBot/
 ## Security notes for anyone cloning this
 
 - **Never commit real credentials.** `appsettings.json` in this repo should not contain real `Meta:*` values — use `dotnet user-secrets` locally, and environment variables / Azure Key Vault (or equivalent) in production.
-- If `PatchlabTwilioBot.csproj.Backup.tmp` or similar stray files exist in your working copy, don't commit them — clean up before pushing.
+- If `PatchlabWhatsAppBot.csproj.Backup.tmp` or similar stray files exist in your working copy, don't commit them — clean up before pushing.

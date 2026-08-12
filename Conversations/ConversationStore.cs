@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
 
-namespace PatchlabTwilioBot.Conversations;
+namespace PatchlabWhatsAppBot.Conversations;
 
 public class ConversationStore
 {

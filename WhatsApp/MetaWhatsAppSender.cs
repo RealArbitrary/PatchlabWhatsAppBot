@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 
-namespace PatchlabTwilioBot.WhatsApp;
+namespace PatchlabWhatsAppBot.WhatsApp;
 
 public class MetaWhatsAppSender : IWhatsAppSender
 {

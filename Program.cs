@@ -1,5 +1,5 @@
-using PatchlabTwilioBot.Conversations;
-using PatchlabTwilioBot.WhatsApp;
+using PatchlabWhatsAppBot.Conversations;
+using PatchlabWhatsAppBot.WhatsApp;
 
 var builder = WebApplication.CreateBuilder(args);
 

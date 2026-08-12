@@ -1,4 +1,4 @@
-﻿namespace PatchlabTwilioBot.Conversations;
+﻿namespace PatchlabWhatsAppBot.Conversations;
 
 public enum ConversationState
 {

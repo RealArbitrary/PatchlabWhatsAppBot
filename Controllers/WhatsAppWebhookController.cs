@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using PatchlabTwilioBot.Conversations;
-using PatchlabTwilioBot.WhatsApp;
+using PatchlabWhatsAppBot.Conversations;
+using PatchlabWhatsAppBot.WhatsApp;
 using System.Text.Json;
 
-namespace PatchlabTwilioBot.Controllers;
+namespace PatchlabWhatsAppBot.Controllers;
 
 [ApiController]
 [Route("webhook/whatsapp")]
