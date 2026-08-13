@@ -1,0 +1,22 @@
+name: Deploy Patchlab WhatsApp Bot
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout latest code
+        uses: actions/checkout@v4
+
+      - name: Publish app
+        run: dotnet publish -c Release -o C:\PatchlabWhatsAppBot\publish
+
+      - name: Restart service
+        run: |
+          nssm stop PatchlabWhatsAppBot
+          nssm start PatchlabWhatsAppBot
