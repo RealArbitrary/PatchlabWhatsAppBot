@@ -14,10 +14,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Stop service
-        run: nssm stop PatchlabWhatsAppBot
+        run: C:\nssm\win64\nssm.exe stop PatchlabWhatsAppBot
 
       - name: Publish app
         run: dotnet publish -c Release -o C:\PatchlabWhatsAppBot\publish
 
       - name: Start service
-        run: nssm start PatchlabWhatsAppBot
+        run: C:\nssm\win64\nssm.exe start PatchlabWhatsAppBot
