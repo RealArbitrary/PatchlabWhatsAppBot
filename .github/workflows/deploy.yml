@@ -13,10 +13,11 @@ jobs:
       - name: Checkout latest code
         uses: actions/checkout@v4
 
+      - name: Stop service
+        run: nssm stop PatchlabWhatsAppBot
+
       - name: Publish app
         run: dotnet publish -c Release -o C:\PatchlabWhatsAppBot\publish
 
-      - name: Restart service
-        run: |
-          nssm stop PatchlabWhatsAppBot
-          nssm start PatchlabWhatsAppBot
+      - name: Start service
+        run: nssm start PatchlabWhatsAppBot
