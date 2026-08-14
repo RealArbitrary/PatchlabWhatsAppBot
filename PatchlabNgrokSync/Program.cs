@@ -1,4 +1,5 @@
 ﻿using System.Net.Http.Json;
+using System.Text.Json.Serialization;
 
 var httpClient = new HttpClient();
 
@@ -16,5 +17,5 @@ if (httpsTunnel is null)
 
 Console.WriteLine($"Found public URL: {httpsTunnel.PublicUrl}");
 
-record NgrokTunnelsResponse(List<NgrokTunnel>? Tunnels);
-record NgrokTunnel(string? PublicUrl);
+record NgrokTunnelsResponse([property: JsonPropertyName("tunnels")] List<NgrokTunnel>? Tunnels);
+record NgrokTunnel([property: JsonPropertyName("public_url")] string? PublicUrl);
