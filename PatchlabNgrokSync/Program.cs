@@ -9,7 +9,20 @@ var httpClient = new HttpClient();
 
 Console.WriteLine("Querying ngrok local API for public tunnel URL...");
 
-var response = await httpClient.GetFromJsonAsync<NgrokTunnelsResponse>("http://127.0.0.1:4040/api/tunnels");
+NgrokTunnelsResponse? response = null;
+for (int i = 0; i < 10; i++)
+{
+    try
+    {
+        response = await httpClient.GetFromJsonAsync<NgrokTunnelsResponse>("http://127.0.0.1:4040/api/tunnels");
+        if (response?.Tunnels?.Any() == true) break;
+    }
+    catch (HttpRequestException)
+    {
+        Console.WriteLine("ngrok API not ready yet, retrying...");
+    }
+    await Task.Delay(2000);
+}
 
 var httpsTunnel = response?.Tunnels?.FirstOrDefault(t => t.PublicUrl?.StartsWith("https://") == true);
 
