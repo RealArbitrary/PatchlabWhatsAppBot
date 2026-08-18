@@ -1,4 +1,8 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".github/workflows/deploy.yml" />
+  </Folder>
   <Project Path="PatchlabNgrokSync/PatchlabNgrokSync.csproj" />
   <Project Path="PatchlabWhatsAppBot.csproj" />
+  <Project Path="WhatsAppBotConfig/WhatsAppBotConfig.csproj" Id="6e6baf1f-1bfb-476f-9849-c6769040e315" />
 </Solution>

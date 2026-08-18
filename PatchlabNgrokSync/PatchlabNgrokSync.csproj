@@ -7,4 +7,12 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\WhatsAppBotConfig\WhatsAppBotConfig.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\config.json')" />
+  </ItemGroup>
+
 </Project>

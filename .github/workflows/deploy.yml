@@ -13,11 +13,20 @@ jobs:
       - name: Checkout latest code
         uses: actions/checkout@v4
 
-      - name: Stop service
+      - name: Stop PatchlabWhatsAppBot service
         run: C:\nssm\win64\nssm.exe stop PatchlabWhatsAppBot
 
-      - name: Publish app
+      - name: Publish PatchlabWhatsAppBot
         run: dotnet publish -c Release -o C:\PatchlabWhatsAppBot\publish
 
-      - name: Start service
+      - name: Start PatchlabWhatsAppBot service
         run: C:\nssm\win64\nssm.exe start PatchlabWhatsAppBot
+
+      - name: Stop PatchlabNgrokSync service
+        run: C:\nssm\win64\nssm.exe stop PatchlabNgrokSync
+
+      - name: Publish PatchlabNgrokSync
+        run: dotnet publish PatchlabNgrokSync\PatchlabNgrokSync.csproj -c Release -o C:\PatchlabNgrokSync\publish
+
+      - name: Start PatchlabNgrokSync service
+        run: C:\nssm\win64\nssm.exe start PatchlabNgrokSync

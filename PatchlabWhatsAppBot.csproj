@@ -9,6 +9,15 @@
 
   <ItemGroup>
     <Compile Remove="PatchlabNgrokSync\**" />
+    <Compile Remove="WhatsAppBotConfig\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="WhatsAppBotConfig\WhatsAppBotConfig.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('config.json')" />
   </ItemGroup>
 
 </Project>

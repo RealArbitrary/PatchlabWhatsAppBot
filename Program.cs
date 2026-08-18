@@ -7,8 +7,14 @@ builder.Services.AddControllers();
 
 builder.Services.AddSingleton<ConversationStore>();
 
-builder.Services.Configure<MetaWhatsAppOptions>(
-    builder.Configuration.GetSection(MetaWhatsAppOptions.SectionName));
+var sharedConfig = WhatsAppBotConfig.SharedConfig.Load();
+
+builder.Services.Configure<MetaWhatsAppOptions>(options =>
+{
+    options.PhoneNumberId = sharedConfig.PhoneNumberId;
+    options.AccessToken = sharedConfig.AccessToken;
+    options.VerifyToken = sharedConfig.VerifyToken;
+});
 
 builder.Services.AddHttpClient<IWhatsAppSender, MetaWhatsAppSender>();
 
