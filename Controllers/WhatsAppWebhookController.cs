@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using PatchlabWhatsAppBot.Conversations;
+using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
 using System.Text.Json;
 
@@ -13,15 +14,18 @@ public class WhatsAppWebhookController : ControllerBase
     private readonly ConversationStore _store;
     private readonly IWhatsAppSender _sender;
     private readonly MetaWhatsAppOptions _options;
+    private readonly ITicketRepository _tickets;
 
     public WhatsAppWebhookController(
         ConversationStore store,
         IWhatsAppSender sender,
-        IOptions<MetaWhatsAppOptions> options)
+        IOptions<MetaWhatsAppOptions> options,
+        ITicketRepository tickets)
     {
         _store = store;
         _sender = sender;
         _options = options.Value;
+        _tickets = tickets;
     }
 
     // Meta calls this ONCE when you set the Callback URL in the dashboard
@@ -60,13 +64,13 @@ public class WhatsAppWebhookController : ControllerBase
         var text = message.GetProperty("text").GetProperty("body").GetString() ?? "";
 
         var session = _store.GetOrCreate(from);
-        var reply = HandleMessage(session, from, text);
+        var reply = await HandleMessageAsync(session, from, text);
         await _sender.SendTextMessageAsync(from, reply);
 
         return Ok();
     }
 
-    private string HandleMessage(ConversationSession session, string from, string text)
+    private async Task<string> HandleMessageAsync(ConversationSession session, string from, string text)
     {
         switch (session.State)
         {
@@ -76,7 +80,8 @@ public class WhatsAppWebhookController : ControllerBase
 
             case ConversationState.AwaitingIssue:
                 session.IssueText = text;
-                session.TicketNumber = $"TCKT-{DateTime.UtcNow:yyyyMMddHHmmss}";
+                var ticket = await _tickets.CreateTicketAsync(from, text);
+                session.TicketNumber = ticket.TicketNumber;
                 var reply = $"Thanks — ticket {session.TicketNumber} created. We'll get back to you.";
                 _store.Reset(from);
                 return reply;

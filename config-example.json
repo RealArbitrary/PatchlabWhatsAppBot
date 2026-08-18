@@ -1,5 +1,6 @@
 {
   "PhoneNumberId": "PASTE_PHONE_NUMBER_ID_HERE",
   "AccessToken": "PASTE_ACCESS_TOKEN_HERE",
-  "VerifyToken": "PASTE_VERIFY_TOKEN_HERE"
+  "VerifyToken": "PASTE_VERIFY_TOKEN_HERE",
+  "SqlConnectionString": "PASTE_SQL_CONNECTION_STRING_HERE"
 }

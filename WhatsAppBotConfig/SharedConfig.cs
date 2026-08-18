@@ -17,6 +17,9 @@ public class SharedConfig
     [JsonPropertyName("VerifyToken")]
     public string VerifyToken { get; set; } = string.Empty;
 
+    [JsonPropertyName("SqlConnectionString")]
+    public string SqlConnectionString { get; set; } = string.Empty;
+
     public static SharedConfig Load()
     {
         if (!File.Exists(FileName))

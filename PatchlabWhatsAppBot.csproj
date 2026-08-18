@@ -20,4 +20,9 @@
     <None Include="config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('config.json')" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.79" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
+  </ItemGroup>
+
 </Project>

@@ -1,4 +1,5 @@
 using PatchlabWhatsAppBot.Conversations;
+using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,6 +18,9 @@ builder.Services.Configure<MetaWhatsAppOptions>(options =>
 });
 
 builder.Services.AddHttpClient<IWhatsAppSender, MetaWhatsAppSender>();
+
+builder.Services.AddSingleton<ITicketRepository>(
+    new TicketRepository(sharedConfig.SqlConnectionString));
 
 var app = builder.Build();
 
