@@ -207,7 +207,10 @@ public class WhatsAppWebhookController : ControllerBase
                 session.CellphoneNumber,
                 "Here are your tickets, please select one to see status:",
                 "View tickets",
-                openTickets.Select(t => new WhatsAppListRow(t.TicketNumber, t.TicketNumber, t.Status)).ToList());
+                    openTickets.Select(t => new WhatsAppListRow(
+                    t.TicketNumber,
+                    t.TicketNumber,
+                    $"{t.Status} - {t.Issue}")).ToList());
             return;
         }
 
