@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using PatchlabWhatsAppBot.Controllers;
 using PatchlabWhatsAppBot.Conversations;
 using PatchlabWhatsAppBot.Customers;
 using PatchlabWhatsAppBot.Data;
+using PatchlabWhatsAppBot.Logging;
 using PatchlabWhatsAppBot.Staff;
 using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
@@ -15,6 +15,8 @@ builder.Services.AddSingleton<ConversationStore>();
 
 var sharedConfig = WhatsAppBotConfig.SharedConfig.Load();
 
+builder.Logging.AddProvider(new DatabaseLoggerProvider(sharedConfig.SqlConnectionString));
+
 builder.Services.Configure<MetaWhatsAppOptions>(options =>
 {
     options.PhoneNumberId = sharedConfig.PhoneNumberId;
@@ -25,7 +27,6 @@ builder.Services.Configure<MetaWhatsAppOptions>(options =>
 
 builder.Services.AddHttpClient<IWhatsAppSender, MetaWhatsAppSender>();
 
-// EF Core replaces the old raw-connection-string TicketRepository.
 builder.Services.AddDbContext<PatchlabDbContext>(options =>
     options.UseSqlServer(sharedConfig.SqlConnectionString));
 

@@ -2,6 +2,16 @@
 
 namespace PatchlabWhatsAppBot.Data;
 
+public class ErrorLog
+{
+    public int Id { get; set; }
+    public string Severity { get; set; } = "";   // "Warning", "Error", "Critical"
+    public string Source { get; set; } = "";     // logger category, e.g. "PatchlabWhatsAppBot.Controllers.WhatsAppWebhookController"
+    public string Message { get; set; } = "";
+    public string? StackTrace { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
 public class Ticket
 {
     public int Id { get; set; }
@@ -39,9 +49,22 @@ public class PatchlabDbContext : DbContext
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<TicketFeedback> TicketFeedback => Set<TicketFeedback>();
+    public DbSet<ErrorLog> ErrorLogs => Set<ErrorLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<ErrorLog>(e =>
+        {
+            e.ToTable("ErrorLogs");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Severity).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Source).HasMaxLength(300).IsRequired();
+            e.Property(x => x.Message).IsRequired();
+            e.Property(x => x.StackTrace);
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
+            e.HasIndex(x => x.CreatedAt).HasDatabaseName("IX_ErrorLogs_CreatedAt");
+        });
+
         modelBuilder.Entity<Ticket>(e =>
         {
             e.ToTable("Tickets");
