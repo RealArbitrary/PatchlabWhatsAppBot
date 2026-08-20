@@ -22,18 +22,20 @@ public class TicketRepository : ITicketRepository
 
     public async Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area)
     {
-        // NB: name/surname/area live in Customers now, not Tickets — kept as
-        // params here only because the controller upserts Customers right
-        // after this call. Nothing extra to store on the Ticket row itself.
+        // name/surname are upserted into Customers by the controller right after
+        // this call, not stored on the Ticket itself. Area, however, is stored on
+        // both: on Customers (as the "last known" area) and here on the Ticket
+        // itself, since the area can differ per-ticket even for a known customer.
         var ticket = new Ticket
         {
             CellphoneNumber = cellphoneNumber,
-            Issue = issueText
+            Issue = issueText,
+            Area = area,
         };
 
         _db.Tickets.Add(ticket);
         await _db.SaveChangesAsync();
-        return ticket; // TicketNumber is computed server-side; re-query if you need it immediately after insert
+        return ticket;
     }
 
     public async Task<List<Ticket>> GetTicketsByCellphoneAsync(string cellphoneNumber)

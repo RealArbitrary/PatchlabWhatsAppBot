@@ -15,9 +15,10 @@ public class ErrorLog
 public class Ticket
 {
     public int Id { get; set; }
-    public string TicketNumber { get; private set; } = ""; // computed column, EF never writes this
+    public string TicketNumber { get; private set; } = "";
     public string CellphoneNumber { get; set; } = "";
     public string Issue { get; set; } = "";
+    public string? Area { get; set; }
     public DateTime CreatedAt { get; set; }
     public string Status { get; set; } = "Open";
 }
@@ -79,6 +80,7 @@ public class PatchlabDbContext : DbContext
 
             e.Property(t => t.CellphoneNumber).HasMaxLength(20).IsRequired();
             e.Property(t => t.Issue).IsRequired();
+            e.Property(t => t.Area).HasMaxLength(200);
             e.Property(t => t.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
             e.Property(t => t.Status).HasMaxLength(20).HasDefaultValue("Open");
 
