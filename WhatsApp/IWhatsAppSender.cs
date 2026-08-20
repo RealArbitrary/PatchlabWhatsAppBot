@@ -21,6 +21,13 @@ public interface IWhatsAppSender
     /// Use for longer/variable-length choices (e.g. ticket IDs).
     /// </summary>
     Task SendListAsync(string to, string bodyText, string buttonLabel, IReadOnlyList<WhatsAppListRow> rows);
+
+    /// <summary>
+    /// Sends a pre-approved Meta message template. Unlike SendTextMessageAsync,
+    /// this works regardless of the 24-hour customer service window — required
+    /// for staff notifications, since Russell doesn't message the bot himself.
+    /// </summary>
+    Task SendTemplateMessageAsync(string to, string templateName, string languageCode, IReadOnlyList<string> bodyParameters);
 }
 
 public record WhatsAppButton(string Id, string Title);

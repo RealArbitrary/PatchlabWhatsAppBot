@@ -110,6 +110,31 @@ public class MetaWhatsAppSender : IWhatsAppSender
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task SendTemplateMessageAsync(string toPhoneNumber, string templateName, string languageCode, IReadOnlyList<string> bodyParameters)
+    {
+        var payload = new
+        {
+            messaging_product = "whatsapp",
+            to = toPhoneNumber,
+            type = "template",
+            template = new
+            {
+                name = templateName,
+                language = new { code = languageCode },
+                components = new[]
+                {
+                new
+                {
+                    type = "body",
+                    parameters = bodyParameters.Select(p => new { type = "text", text = p }).ToArray()
+                }
+            }
+            }
+        };
+
+        await PostAsync(payload);
+    }
+
     private static string Truncate(string value, int maxLength)
         => value.Length <= maxLength ? value : value[..maxLength];
 }

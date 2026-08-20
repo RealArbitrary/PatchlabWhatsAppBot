@@ -22,15 +22,19 @@ public class WhatsAppStaffNotifier : IStaffNotifier
 
     public Task NotifyNewTicketAsync(string ticketNumber, string issueText)
     {
-        return _sender.SendTextMessageAsync(
+        return _sender.SendTemplateMessageAsync(
             _options.RussellCellphoneNumber,
-            $"New ticket {ticketNumber} logged:\n{issueText}");
+            "new_ticket_logged",
+            "en", // confirm exact language code from WhatsApp Manager
+            new[] { ticketNumber, issueText });
     }
 
     public Task NotifyUnhappyTicketAsync(string ticketNumber, string cellphoneNumber, string reason)
     {
-        return _sender.SendTextMessageAsync(
+        return _sender.SendTemplateMessageAsync(
             _options.RussellCellphoneNumber,
-            $"Teacher unhappy with ticket {ticketNumber} ({cellphoneNumber}):\n{reason}");
+            "ticket_unhappy",
+            "en",
+            new[] { ticketNumber, cellphoneNumber, reason });
     }
 }

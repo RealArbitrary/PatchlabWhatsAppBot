@@ -19,6 +19,7 @@ public class WhatsAppWebhookController : ControllerBase
     private readonly ITicketRepository _tickets;
     private readonly ICustomerRepository _customers;
     private readonly IStaffNotifier _staffNotifier;
+    private readonly ILogger<WhatsAppWebhookController> _logger;
 
     // Any of these, typed in any state, cancels whatever flow the user is
     // mid-way through and starts over from the beginning. Without this,
@@ -28,12 +29,13 @@ public class WhatsAppWebhookController : ControllerBase
     private static readonly string[] ResetKeywords = { "hi", "hello", "menu", "cancel", "start", "restart" };
 
     public WhatsAppWebhookController(
-        ConversationStore store,
-        IWhatsAppSender sender,
-        IOptions<MetaWhatsAppOptions> options,
-        ITicketRepository tickets,
-        ICustomerRepository customers,
-        IStaffNotifier staffNotifier)
+     ConversationStore store,
+     IWhatsAppSender sender,
+     IOptions<MetaWhatsAppOptions> options,
+     ITicketRepository tickets,
+     ICustomerRepository customers,
+     IStaffNotifier staffNotifier,
+     ILogger<WhatsAppWebhookController> logger)
     {
         _store = store;
         _sender = sender;
@@ -41,6 +43,7 @@ public class WhatsAppWebhookController : ControllerBase
         _tickets = tickets;
         _customers = customers;
         _staffNotifier = staffNotifier;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -307,7 +310,16 @@ public class WhatsAppWebhookController : ControllerBase
             session.LastName ?? "",
             session.Area);
 
-        await _staffNotifier.NotifyNewTicketAsync(ticket.TicketNumber, session.IssueText);
+        try
+        {
+            await _staffNotifier.NotifyNewTicketAsync(ticket.TicketNumber, session.IssueText);
+        }
+        catch (Exception ex)
+        {
+            // Staff notification failing must never block the customer's own
+            // confirmation below — the ticket is already saved regardless.
+            _logger.LogError(ex, "Failed to notify staff of new ticket {TicketNumber}", ticket.TicketNumber);
+        }
 
         await _sender.SendTextMessageAsync(session.CellphoneNumber,
             "Thank you for your time, your ticket has been logged. " +
@@ -361,10 +373,17 @@ public class WhatsAppWebhookController : ControllerBase
     {
         await _tickets.AddFeedbackAsync(session.SelectedTicketNumber ?? "unknown", "Unhappy", input);
 
-        await _staffNotifier.NotifyUnhappyTicketAsync(
-            session.SelectedTicketNumber ?? "unknown",
-            session.CellphoneNumber,
-            input);
+        try
+        {
+            await _staffNotifier.NotifyUnhappyTicketAsync(
+                session.SelectedTicketNumber ?? "unknown",
+                session.CellphoneNumber,
+                input);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to notify staff of unhappy ticket {TicketNumber}", session.SelectedTicketNumber);
+        }
 
         await _sender.SendTextMessageAsync(session.CellphoneNumber,
             "Thank you for notifying us with your problem, we will be in contact regarding this ticket.");
