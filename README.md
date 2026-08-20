@@ -13,24 +13,51 @@ Patchlab's WhatsApp number receives messages from two kinds of senders:
 
 The bot runs a card-driven conversation state machine per phone number and replies automatically, using WhatsApp's interactive button/list messages wherever there's a fixed set of choices, rather than relying on the teacher typing free text correctly. A human can also take over a conversation manually from the same number/thread, since the number is no longer usable in the normal WhatsApp Business consumer app once it's on the Cloud API. That manual takeover tool lives in the separate `PatchlabTicketing` project, not here (see "Related projects" below).
 
+Separately, the bot notifies a staff member (Russell) on new tickets and on "not resolved" feedback. Because staff don't message the bot themselves, this notification path uses pre-approved Meta message templates rather than free text — see "Staff notifications & message templates" below.
+
 ## Current flow (LSF Personeel)
 
 ```
 "hi"                       → card: "Log a ticket" / "Check on existing ticket"
 
 Log a ticket (new number)  → asks name/surname → area → issue description
-                            → ticket created, confirmation sent
+                            → ticket created, confirmation sent (includes ticket number)
+                            → staff notified via template message (best-effort, never blocks the reply above)
 
 Log a ticket (known number) → card: "Use saved details" / "Update my details"
                              → skips straight to area (name/surname already known)
 
-Check on existing ticket    → card: list of this number's ticket IDs
+Check on existing ticket    → card: list of this number's ticket IDs, each row shows "{Status} - {Issue}"
                              → pulls latest status
                              → card: "I'm happy" / "Log another ticket" / "Not resolved to my liking"
-                             → unhappy branch collects a reason and notifies staff
+                             → unhappy branch collects a reason, notifies staff via template (best-effort), and confirms to the teacher
 ```
 
 Returning numbers are recognised via the `Customers` table (see Data persistence below), so a teacher who has logged a ticket before never has to retype their name and surname — only re-confirm or update it.
+
+## Staff notifications & message templates
+
+Staff notifications (new ticket logged, ticket marked "not resolved") are sent to a fixed staff number (`RussellCellphoneNumber` in config) via `IStaffNotifier`. These **cannot use free-form text messages** (`SendTextMessageAsync`) reliably, because Meta's Cloud API only allows free text to a number that has messaged the business within the last 24 hours — staff don't message the bot on any regular basis, so they fall outside that window almost all the time. Sending free text outside the window is rejected by the Graph API.
+
+The fix is to send staff notifications as pre-approved **WhatsApp Message Templates** via `SendTemplateMessageAsync`, which work regardless of the 24-hour window. Two templates exist in Meta's WhatsApp Manager, both **Utility** category, English (`en`), with positional/number-type variables:
+
+- **`new_ticket_logged`** — `New ticket {{1}} has been logged. Issue details: {{2}}.`
+- **`ticket_unhappy`** — `Teacher unhappy with ticket {{1}} from {{2}}. Reason: {{3}}. Please follow up.`
+
+Notes if you ever add or edit a template:
+- A variable can't be the first or last token in the body — Meta rejects with a "too many variables for its length" error. Add trailing static text after the last variable.
+- A literal `\n` typed into the template body editor is **not** interpreted as a newline — it renders as the two characters `\` and `n`. Use an actual line break (Enter) in the editor instead.
+- The parameter count passed to `SendTemplateMessageAsync` must match the template's `{{n}}` count exactly, in order, or the send is rejected.
+
+New templates start in `PENDING` review status and can't be used until Meta approves them. You can check status directly against the Graph API:
+
+```powershell
+$token = "YOUR_ACCESS_TOKEN_HERE"
+Invoke-RestMethod -Uri "https://graph.facebook.com/v21.0/<whatsapp-business-account-id>/message_templates" -Headers @{ Authorization = "Bearer $token" } -Method Get
+```
+Pipe `.data` through `Select-Object name, language, status, category | Format-Table` for a readable view. Use the WhatsApp Business Account ID here, not the Phone Number ID — they're different IDs and only the former works against this endpoint.
+
+Both controller call sites into `IStaffNotifier` are wrapped in try/catch with `ILogger` logging. **A staff-notification failure (pending template, wrong language code, Graph API outage, anything) can never block the customer-facing ticket flow** — the ticket/feedback is already persisted regardless of whether staff gets pinged. This is a permanent design choice, not a temporary workaround for the pending-template period.
 
 ## Stack
 
@@ -56,13 +83,13 @@ PatchlabWhatsAppBot/
 ├── Tickets/
 │   └── TicketRepository.cs            # ITicketRepository, EF-backed — create tickets, list by number, latest status
 ├── Staff/
-│   └── WhatsAppStaffNotifier.cs       # IStaffNotifier — messages staff on new tickets and unhappy-ticket reports
+│   └── WhatsAppStaffNotifier.cs       # IStaffNotifier — notifies staff on new tickets and unhappy-ticket reports via message templates
 ├── Data/
-│   └── PatchlabDbContext.cs           # EF Core DbContext + entity configuration for Tickets and Customers
+│   └── PatchlabDbContext.cs           # EF Core DbContext + entity configuration for Tickets, Customers, and TicketFeedback
 ├── Migrations/                        # EF Core migrations, generated via Add-Migration — see "Database & migrations"
 ├── WhatsApp/
 │   ├── MetaWhatsAppOptions.cs         # bound config: PhoneNumberId, AccessToken, VerifyToken, staff notify number
-│   ├── IWhatsAppSender.cs             # text + interactive button/list sends
+│   ├── IWhatsAppSender.cs             # text + interactive button/list sends, plus pre-approved template sends
 │   └── MetaWhatsAppSender.cs          # sends replies via graph.facebook.com
 └── Program.cs
 ```
@@ -73,7 +100,7 @@ PatchlabWhatsAppBot/
 
 ## Data persistence
 
-Tickets and known customers are stored in a SQL Server database named `Patchlab`, managed via EF Core migrations rather than hand-written SQL. The two tables:
+Tickets, known customers, and ticket feedback are stored in a SQL Server database named `Patchlab`, managed via EF Core migrations rather than hand-written SQL. The tables:
 
 ```sql
 CREATE TABLE Tickets (
@@ -93,9 +120,17 @@ CREATE TABLE Customers (
     CreatedAt        DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     UpdatedAt        DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
+
+CREATE TABLE TicketFeedback (
+    Id          INT IDENTITY(1,1) PRIMARY KEY,
+    TicketId    INT            NOT NULL REFERENCES Tickets(Id) ON DELETE CASCADE,
+    Status      NVARCHAR(20)   NOT NULL,  -- "Satisfied" or "Unhappy"
+    Reason      NVARCHAR(MAX)  NULL,      -- populated only for "Unhappy"
+    CreatedAt   DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
+);
 ```
 
-`TicketNumber` is a persisted computed column derived from `Id`. There is no separate counter or sequence table, so there is no risk of formatting drift between this bot and `PatchlabTicketing`. `Customers` is keyed on `CellphoneNumber` and joins directly onto `Tickets.CellphoneNumber` — it exists purely so the bot can recognise a returning teacher and skip re-asking for their name and surname.
+`TicketNumber` is a persisted computed column derived from `Id`. There is no separate counter or sequence table, so there is no risk of formatting drift between this bot and `PatchlabTicketing`. `Customers` is keyed on `CellphoneNumber` and joins directly onto `Tickets.CellphoneNumber` — it exists purely so the bot can recognise a returning teacher and skip re-asking for their name and surname. `TicketFeedback` records the outcome of the "check on existing ticket" flow and is what the planned admin dashboard will surface (see Roadmap).
 
 The SQL connection string lives in `config.json`, under the `SqlConnectionString` key (see Configuration below). Authentication is Windows integrated auth. The account the bot's service runs under needs an explicit SQL Server login. If the service runs as `LocalSystem`, that identity presents to SQL Server as `NT AUTHORITY\SYSTEM` for local connections, not the machine account name.
 
@@ -159,6 +194,7 @@ Copy `config-example.json` to `config.json` and fill in real values. `config.jso
 The steps below are written generically since the exact hosting target may change — what matters is the shape of the deployment, not the specific tool. Whatever's used, it needs to satisfy four things: the app runs continuously as a background process, restarts automatically if it (or the machine) goes down, has a stable public HTTPS endpoint Meta can reach, and applies pending database migrations before serving new code.
 
 1. **Pick a process manager** to keep the app running as a background service rather than an interactive console app. On Windows, [NSSM](https://nssm.cc/) (currently in use) wraps any executable as a proper Windows service — install, point it at the published `.exe`, set it to auto-start, done. Any equivalent works (a native Windows Service, a systemd unit on Linux, a container orchestrator, etc.) — the app itself doesn't care, it's just `dotnet run`/a published executable underneath.
+   - **Gotcha:** NSSM can report `SERVICE_START_PENDING` momentarily on a start command even when the service comes up healthy seconds later. A deploy script that treats any non-`SERVICE_RUNNING` response as a hard failure will false-positive here — prefer a short retry/wait loop over a single immediate status check (see Roadmap).
 2. **Publish the app** to a stable folder the process manager points at:
    ```
    dotnet publish -c Release -o <publish folder>
@@ -178,7 +214,7 @@ The steps below are written generically since the exact hosting target may chang
 
 ## Related projects
 
-Ticket handling beyond "create a ticket row" (dashboard viewing, status updates, the manual takeover reply tool) lives in a separate app, `PatchlabTicketing`, not in this repo. That app is an ASP.NET Core Web API plus React dashboard, reading and updating the same SQL `Tickets` table this bot writes to.
+Ticket handling beyond "create a ticket row" (dashboard viewing, status updates, feedback review, the manual takeover reply tool) lives in a separate app, `PatchlabTicketing`, not in this repo. That app is an ASP.NET Core Web API plus React dashboard, reading and updating the same SQL database this bot writes to. An admin page and ticket-close functionality are planned there — see Roadmap.
 
 The two apps do not talk to each other over HTTP. The database is the interface. This bot has zero new endpoints or CORS surface as a result. The tradeoff is that dashboard updates are not instant, `PatchlabTicketing` polls the database every few seconds rather than receiving a push notification when a new ticket is written. That was a deliberate choice, not a placeholder, live push (SignalR) was considered and declined for now.
 
@@ -190,12 +226,14 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 
 - `.NET 10`'s built in OpenAPI support currently fails to compile against `Microsoft.OpenApi` 3.x (`CS0200`). Pin to `Microsoft.OpenApi 2.3.9`, or drop Swagger entirely, it isn't adding value on a webhook only service.
 - Meta's webhook GET verification (`hub.challenge`) must be echoed back as plain text, not wrapped in JSON.
-- Meta enforces a 24 hour customer service window: free form text replies are only allowed within 24 hours of the customer's last message. Outside that window, business initiated messages require pre approved templates. This mainly affects manual dashboard testing (messaging yourself first), it shouldn't affect the real bot flow, since customers always message in first.
+- Meta enforces a 24 hour customer service window: free form text replies are only allowed within 24 hours of the customer's last message. Outside that window, business initiated messages require pre approved templates. This does not affect the customer-facing bot flow, since customers always message in first — **but it does affect staff notifications**, since staff don't message the bot on a regular schedule and fall outside the window almost all the time. That's why staff notifications go through message templates instead of free text (see "Staff notifications & message templates" above). Unhandled, a rejected send here can also fail silently: `EnsureSuccessStatusCode()` throws, but nothing writes that exception anywhere visible unless a logging provider like Windows Event Log is explicitly configured (see Roadmap) — this is why staff notifications went unnoticed as broken for an extended period before being diagnosed.
 - Meta's "service conversations" (replying to inbound messages) are currently free, but Meta has a pricing change coming October 1, 2026 making service/utility messages inside the customer service window chargeable.
 - Unverified Cloud API apps are capped at 250 unique customers messaged per rolling 24 hours. Business Verification removes this cap, not yet done, deferred until/unless the limit is hit.
 - WhatsApp interactive button messages cap out at 3 buttons, 20 characters each; interactive lists cap at 10 rows, 24 characters per title, 72 per description. Sending more/longer than that will be rejected by the Graph API.
+- Message templates: a variable can't be the first or last token in the body, and a literal `\n` in the template editor doesn't render as a newline. See "Staff notifications & message templates" above.
+- New message templates go into `PENDING` review with Meta and can't be sent until approved — check status via the Graph API's `message_templates` endpoint (see above) rather than assuming.
 - PowerShell's `curl` alias mangles curl style flags, use `-Headers @{...}` and `-UseBasicParsing` instead.
-- A process manager showing "Running" does not confirm health, verify with a live request or log check.
+- A process manager showing "Running" does not confirm health, verify with a live request or log check. NSSM specifically can also report a transient `SERVICE_START_PENDING` on start that resolves to healthy shortly after — don't treat that as a hard failure in automation.
 - A schema change made by hand directly against a database (rather than via `Add-Migration`) will desync EF's migration history from reality — the next real migration applied there may then conflict with what already exists. Keep all schema changes going through migrations once adopted, even "quick" ones.
 - Any secret pasted into a chat or AI session should be treated as compromised and rotated.
 
@@ -206,12 +244,19 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 - [ ] CI/CD deploy ordering flaw, a failed `dotnet publish` leaves the service stopped indefinitely with no alert. Applies to this project, `PatchlabNgrokSync`, and `PatchlabTicketing`.
 - [ ] Replace the in memory `ConversationStore` with persistent storage, it is currently wiped on every service restart.
 - [ ] Read and log Meta's error response body on send failures instead of letting `EnsureSuccessStatusCode()` throw blind.
+- [ ] **Configure a real logging provider (e.g. `AddEventLog()`)** so unhandled exceptions and logged errors actually surface somewhere visible in production — currently not confirmed to be wired up, and its absence is why a staff-notification failure went undiagnosed for an extended period.
+- [ ] **Admin/error dashboard** in `PatchlabTicketing` — surface ticket feedback (`TicketFeedback` joined against `Tickets`) and, once the logging gap above is closed, recent errors. Also a natural place to surface messaging-tier usage (see next item).
+- [ ] **Query current WhatsApp messaging tier/usage** from the Graph API and surface it in the admin dashboard, so the 250-unique-customers-per-24h cap (see gotchas) can be watched proactively rather than discovered by hitting it.
+- [ ] **Ticket close functionality**: add a `CloseTicketAsync`-style method to `ITicketRepository`/`TicketRepository` (no way to change `Status` currently exists) and wire it to `PatchlabTicketing`'s existing "Close" action.
 - [ ] Replace manual `JsonElement` parsing of Meta's webhook payload with strongly typed DTOs and `TryGetProperty` guards throughout.
 - [ ] Bump Graph API calls from `v21.0` to `v26.0` before Meta removes `v21.0` support.
 - [ ] Switch this service's process-manager account off `LocalSystem`/equivalent to a dedicated least privilege account. Should happen before going live, does not affect day to day development.
 - [ ] Wire `Tickets.GetLatestStatusCommentAsync` to wherever ticket status comments actually live, rather than the current placeholder reflecting the `Status` column directly.
+- [ ] Two-step name/surname prompt (or smarter splitting) — the current naive `Split(' ', 2)` in `HandleNameAsync` breaks compound first names (e.g. "De Wet van der Merwe" → FirstName "De").
+- [ ] Make the deploy pipeline's NSSM start-check tolerant of transient `SERVICE_START_PENDING` (short retry/wait loop instead of a single immediate check).
 - [ ] Remove the dead `MetaWhatsAppOptions.SectionName` code, cosmetic, low priority.
 - [ ] Delete the stray `PatchlabTwilioBot.csproj.Backup.tmp` file at the repo root.
+- [ ] Dapper cleanup, deliberately deferred until the rest of this list settles.
 
 ## Security notes for anyone cloning this
 
