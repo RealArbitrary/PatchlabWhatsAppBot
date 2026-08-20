@@ -25,6 +25,7 @@ jobs:
           if (-not (Get-Command dotnet-ef -ErrorAction SilentlyContinue)) {
             dotnet tool install --global dotnet-ef
           }
+          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
         shell: powershell
 
       - name: Apply database migrations
