@@ -16,6 +16,14 @@ jobs:
       - name: Stop PatchlabWhatsAppBot service
         run: C:\nssm\win64\nssm.exe stop PatchlabWhatsAppBot
 
+      - name: Clean PatchlabWhatsAppBot publish folder
+        run: |
+          if (Test-Path "C:\PatchlabWhatsAppBot\publish") {
+            Get-ChildItem "C:\PatchlabWhatsAppBot\publish" -Exclude config.json |
+              Remove-Item -Recurse -Force
+          }
+        shell: powershell
+
       - name: Publish PatchlabWhatsAppBot
         run: dotnet publish -c Release -o C:\PatchlabWhatsAppBot\publish
 
@@ -29,7 +37,7 @@ jobs:
         shell: powershell
 
       - name: Apply database migrations
-        run: dotnet ef database update --assembly "C:\PatchlabWhatsAppBot\publish\PatchlabWhatsAppBot.dll" --startup-assembly "C:\PatchlabWhatsAppBot\publish\PatchlabWhatsAppBot.dll" --connection "$env:PATCHLAB_DB_CONNECTION"
+        run: dotnet ef database update --no-build --assembly "C:\PatchlabWhatsAppBot\publish\PatchlabWhatsAppBot.dll" --startup-assembly "C:\PatchlabWhatsAppBot\publish\PatchlabWhatsAppBot.dll" --connection "$env:PATCHLAB_DB_CONNECTION"
         shell: powershell
         env:
           PATCHLAB_DB_CONNECTION: ${{ secrets.PATCHLAB_DB_CONNECTION }}
