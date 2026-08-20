@@ -87,10 +87,15 @@ public class WhatsAppWebhookController : ControllerBase
         // free-typed text — button/list taps carry their own ids (e.g.
         // "use_saved") and should never accidentally match a keyword.
         if (message.GetProperty("type").GetString() == "text"
-            && ResetKeywords.Contains(input.Trim().ToLowerInvariant()))
+    && ResetKeywords.Contains(input.Trim().ToLowerInvariant()))
         {
             _store.Reset(session.CellphoneNumber);
-            session.State = ConversationState.New;
+            session = _store.GetOrCreate(from); // re-fetch: Reset() removed the old
+                                                // session entirely, so the object
+                                                // we were holding is now orphaned
+                                                // and any further changes to it
+                                                // would never reach the store
+            session.CellphoneNumber = from;
         }
 
         await HandleMessageAsync(session, input);
