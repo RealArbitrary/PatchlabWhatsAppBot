@@ -25,11 +25,11 @@ jobs:
           if (-not (Get-Command dotnet-ef -ErrorAction SilentlyContinue)) {
             dotnet tool install --global dotnet-ef
           }
-        shell: pwsh
+        shell: powershell
 
       - name: Apply database migrations
         run: dotnet ef database update --project . --connection "$env:PATCHLAB_DB_CONNECTION"
-        shell: pwsh
+        shell: powershell
         env:
           PATCHLAB_DB_CONNECTION: ${{ secrets.PATCHLAB_DB_CONNECTION }}
       # --- end new ---
