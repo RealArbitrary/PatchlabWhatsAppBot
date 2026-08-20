@@ -8,6 +8,7 @@ public interface ITicketRepository
     Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area);
     Task<List<Ticket>> GetTicketsByCellphoneAsync(string cellphoneNumber);
     Task<string?> GetLatestStatusCommentAsync(string ticketNumber);
+    Task AddFeedbackAsync(string ticketNumber, string status, string? reason);
 }
 
 public class TicketRepository : ITicketRepository
@@ -51,5 +52,20 @@ public class TicketRepository : ITicketRepository
         // Status column so it's not a dead stub.
         var ticket = await _db.Tickets.FirstOrDefaultAsync(t => t.TicketNumber == ticketNumber);
         return ticket?.Status;
+    }
+
+    public async Task AddFeedbackAsync(string ticketNumber, string status, string? reason)
+    {
+        var ticket = await _db.Tickets.FirstOrDefaultAsync(t => t.TicketNumber == ticketNumber);
+        if (ticket is null) return; // shouldn't happen in practice, but don't crash the flow over it
+
+        _db.TicketFeedback.Add(new TicketFeedback
+        {
+            TicketId = ticket.Id,
+            Status = status,
+            Reason = reason
+        });
+
+        await _db.SaveChangesAsync();
     }
 }

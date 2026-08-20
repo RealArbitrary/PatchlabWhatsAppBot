@@ -1,5 +1,4 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using System.Reflection.Emit;
 
 namespace PatchlabWhatsAppBot.Data;
 
@@ -23,12 +22,23 @@ public class Customer
     public DateTime UpdatedAt { get; set; }
 }
 
+public class TicketFeedback
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket Ticket { get; set; } = null!;
+    public string Status { get; set; } = ""; // "Satisfied" or "Unhappy"
+    public string? Reason { get; set; }      // populated only for "Unhappy"
+    public DateTime CreatedAt { get; set; }
+}
+
 public class PatchlabDbContext : DbContext
 {
     public PatchlabDbContext(DbContextOptions<PatchlabDbContext> options) : base(options) { }
 
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<TicketFeedback> TicketFeedback => Set<TicketFeedback>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -63,6 +73,21 @@ public class PatchlabDbContext : DbContext
             e.Property(c => c.Area).HasMaxLength(200);
             e.Property(c => c.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
             e.Property(c => c.UpdatedAt).HasDefaultValueSql("sysutcdatetime()");
+        });
+
+        modelBuilder.Entity<TicketFeedback>(e =>
+        {
+            e.ToTable("TicketFeedback");
+            e.HasKey(f => f.Id);
+
+            e.Property(f => f.Status).HasMaxLength(20).IsRequired();
+            e.Property(f => f.Reason);
+            e.Property(f => f.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
+
+            e.HasOne(f => f.Ticket)
+                .WithMany()
+                .HasForeignKey(f => f.TicketId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

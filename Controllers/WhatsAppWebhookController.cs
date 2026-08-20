@@ -18,7 +18,14 @@ public class WhatsAppWebhookController : ControllerBase
     private readonly MetaWhatsAppOptions _options;
     private readonly ITicketRepository _tickets;
     private readonly ICustomerRepository _customers;
-    private readonly IStaffNotifier _staffNotifier; 
+    private readonly IStaffNotifier _staffNotifier;
+
+    // Any of these, typed in any state, cancels whatever flow the user is
+    // mid-way through and starts over from the beginning. Without this,
+    // someone stuck mid-flow (e.g. sitting at "select a ticket") who types
+    // something arbitrary gets treated as if they'd answered the current
+    // question, which leads to confusing dead ends.
+    private static readonly string[] ResetKeywords = { "hi", "hello", "menu", "cancel", "start", "restart" };
 
     public WhatsAppWebhookController(
         ConversationStore store,
@@ -74,6 +81,17 @@ public class WhatsAppWebhookController : ControllerBase
 
         var session = _store.GetOrCreate(from);
         session.CellphoneNumber = from;
+
+        // Global reset: regardless of what state the conversation is in,
+        // a reset keyword bails out to the very start. Only applies to
+        // free-typed text — button/list taps carry their own ids (e.g.
+        // "use_saved") and should never accidentally match a keyword.
+        if (message.GetProperty("type").GetString() == "text"
+            && ResetKeywords.Contains(input.Trim().ToLowerInvariant()))
+        {
+            _store.Reset(session.CellphoneNumber);
+            session.State = ConversationState.New;
+        }
 
         await HandleMessageAsync(session, input);
         return Ok();
@@ -158,7 +176,7 @@ public class WhatsAppWebhookController : ControllerBase
             new[]
             {
                 new WhatsAppButton("log_ticket", "Log a ticket"),
-                new WhatsAppButton("check_existing", "Check on existing ticket")
+                new WhatsAppButton("check_existing", "Check my tickets")
             });
     }
 
@@ -306,9 +324,9 @@ public class WhatsAppWebhookController : ControllerBase
             status ?? "No updates on this ticket yet.",
             new[]
             {
-                new WhatsAppButton("satisfied", "I am happy with the results"),
-                new WhatsAppButton("log_another", "I want to log another ticket"),
-                new WhatsAppButton("unhappy", "My ticket has not been resolved to my liking")
+                new WhatsAppButton("satisfied", "Happy with result"),
+                new WhatsAppButton("log_another", "Log another ticket"),
+                new WhatsAppButton("unhappy", "Not resolved")
             });
     }
 
@@ -327,6 +345,7 @@ public class WhatsAppWebhookController : ControllerBase
                 break;
 
             default: // "satisfied" or anything else
+                await _tickets.AddFeedbackAsync(session.SelectedTicketNumber ?? "unknown", "Satisfied", null);
                 await _sender.SendTextMessageAsync(session.CellphoneNumber, "Thank you and have a nice day.");
                 _store.Reset(session.CellphoneNumber);
                 break;
@@ -335,6 +354,8 @@ public class WhatsAppWebhookController : ControllerBase
 
     private async Task HandleUnhappyReasonAsync(ConversationSession session, string input)
     {
+        await _tickets.AddFeedbackAsync(session.SelectedTicketNumber ?? "unknown", "Unhappy", input);
+
         await _staffNotifier.NotifyUnhappyTicketAsync(
             session.SelectedTicketNumber ?? "unknown",
             session.CellphoneNumber,
