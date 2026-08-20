@@ -29,7 +29,7 @@ jobs:
         shell: powershell
 
       - name: Apply database migrations
-        run: dotnet ef database update --project . --connection "$env:PATCHLAB_DB_CONNECTION"
+        run: dotnet ef database update --project . --configuration Release --connection "$env:PATCHLAB_DB_CONNECTION"
         shell: powershell
         env:
           PATCHLAB_DB_CONNECTION: ${{ secrets.PATCHLAB_DB_CONNECTION }}
