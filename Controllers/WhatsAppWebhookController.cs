@@ -322,8 +322,8 @@ public class WhatsAppWebhookController : ControllerBase
         }
 
         await _sender.SendTextMessageAsync(session.CellphoneNumber,
-            "Thank you for your time, your ticket has been logged. " +
-            "To view your tickets please message me again.");
+    $"Thank you for your time, your ticket {ticket.TicketNumber} has been logged. " +
+    "To view your tickets please message me again.");
 
         _store.Reset(session.CellphoneNumber);
     }
