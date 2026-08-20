@@ -1,0 +1,68 @@
+﻿using Microsoft.EntityFrameworkCore;
+using System.Reflection.Emit;
+
+namespace PatchlabWhatsAppBot.Data;
+
+public class Ticket
+{
+    public int Id { get; set; }
+    public string TicketNumber { get; private set; } = ""; // computed column, EF never writes this
+    public string CellphoneNumber { get; set; } = "";
+    public string Issue { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+    public string Status { get; set; } = "Open";
+}
+
+public class Customer
+{
+    public string CellphoneNumber { get; set; } = "";
+    public string FirstName { get; set; } = "";
+    public string LastName { get; set; } = "";
+    public string? Area { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public class PatchlabDbContext : DbContext
+{
+    public PatchlabDbContext(DbContextOptions<PatchlabDbContext> options) : base(options) { }
+
+    public DbSet<Ticket> Tickets => Set<Ticket>();
+    public DbSet<Customer> Customers => Set<Customer>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Ticket>(e =>
+        {
+            e.ToTable("Tickets");
+            e.HasKey(t => t.Id);
+
+            e.Property(t => t.Id).ValueGeneratedOnAdd();
+
+            // Computed, persisted column — EF must never try to insert/update it.
+            e.Property(t => t.TicketNumber)
+                .HasComputedColumnSql("('TCKT-'+right('0000'+CONVERT([varchar](10),[Id]),(4)))", stored: true)
+                .ValueGeneratedOnAddOrUpdate();
+
+            e.Property(t => t.CellphoneNumber).HasMaxLength(20).IsRequired();
+            e.Property(t => t.Issue).IsRequired();
+            e.Property(t => t.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
+            e.Property(t => t.Status).HasMaxLength(20).HasDefaultValue("Open");
+
+            e.HasIndex(t => t.CellphoneNumber).HasDatabaseName("IX_Tickets_CellphoneNumber");
+        });
+
+        modelBuilder.Entity<Customer>(e =>
+        {
+            e.ToTable("Customers");
+            e.HasKey(c => c.CellphoneNumber);
+
+            e.Property(c => c.CellphoneNumber).HasMaxLength(20);
+            e.Property(c => c.FirstName).HasMaxLength(100).IsRequired();
+            e.Property(c => c.LastName).HasMaxLength(100).IsRequired();
+            e.Property(c => c.Area).HasMaxLength(200);
+            e.Property(c => c.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
+            e.Property(c => c.UpdatedAt).HasDefaultValueSql("sysutcdatetime()");
+        });
+    }
+}

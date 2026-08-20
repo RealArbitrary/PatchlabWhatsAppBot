@@ -5,4 +5,5 @@
     public string PhoneNumberId { get; set; } = "";
     public string AccessToken { get; set; } = "";
     public string VerifyToken { get; set; } = "";
+    public string RussellCellphoneNumber { get; set; } = "";
 }

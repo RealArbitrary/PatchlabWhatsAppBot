@@ -1,34 +1,55 @@
-﻿using Dapper;
-using Microsoft.Data.SqlClient;
+﻿using Microsoft.EntityFrameworkCore;
+using PatchlabWhatsAppBot.Data;
 
 namespace PatchlabWhatsAppBot.Tickets;
 
-public record TicketRecord(int Id, string TicketNumber);
-
 public interface ITicketRepository
 {
-    Task<TicketRecord> CreateTicketAsync(string cellphoneNumber, string issue);
+    Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area);
+    Task<List<Ticket>> GetTicketsByCellphoneAsync(string cellphoneNumber);
+    Task<string?> GetLatestStatusCommentAsync(string ticketNumber);
 }
 
 public class TicketRepository : ITicketRepository
 {
-    private readonly string _connectionString;
+    private readonly PatchlabDbContext _db;
 
-    public TicketRepository(string connectionString)
+    public TicketRepository(PatchlabDbContext db)
     {
-        _connectionString = connectionString;
+        _db = db;
     }
 
-    public async Task<TicketRecord> CreateTicketAsync(string cellphoneNumber, string issue)
+    public async Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area)
     {
-        const string sql = """
-            INSERT INTO Tickets (CellphoneNumber, Issue)
-            OUTPUT INSERTED.Id, INSERTED.TicketNumber
-            VALUES (@cellphoneNumber, @issue);
-            """;
+        // NB: name/surname/area live in Customers now, not Tickets — kept as
+        // params here only because the controller upserts Customers right
+        // after this call. Nothing extra to store on the Ticket row itself.
+        var ticket = new Ticket
+        {
+            CellphoneNumber = cellphoneNumber,
+            Issue = issueText
+        };
 
-        await using var conn = new SqlConnection(_connectionString);
-        var record = await conn.QuerySingleAsync<TicketRecord>(sql, new { cellphoneNumber, issue });
-        return record;
+        _db.Tickets.Add(ticket);
+        await _db.SaveChangesAsync();
+        return ticket; // TicketNumber is computed server-side; re-query if you need it immediately after insert
+    }
+
+    public async Task<List<Ticket>> GetTicketsByCellphoneAsync(string cellphoneNumber)
+    {
+        return await _db.Tickets
+            .Where(t => t.CellphoneNumber == cellphoneNumber)
+            .OrderByDescending(t => t.CreatedAt)
+            .ToListAsync();
+    }
+
+    public async Task<string?> GetLatestStatusCommentAsync(string ticketNumber)
+    {
+        // Placeholder — wire this up to wherever ticket status comments
+        // actually live (looked like a separate server-side note in the
+        // handoff doc, e.g. "Ons wag vir parte"). For now, reflect the
+        // Status column so it's not a dead stub.
+        var ticket = await _db.Tickets.FirstOrDefaultAsync(t => t.TicketNumber == ticketNumber);
+        return ticket?.Status;
     }
 }

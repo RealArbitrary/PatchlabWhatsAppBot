@@ -19,6 +19,21 @@ jobs:
       - name: Publish PatchlabWhatsAppBot
         run: dotnet publish -c Release -o C:\PatchlabWhatsAppBot\publish
 
+      # --- new: apply EF Core migrations before the app starts on the new build ---
+      - name: Install dotnet-ef tool
+        run: |
+          if (-not (Get-Command dotnet-ef -ErrorAction SilentlyContinue)) {
+            dotnet tool install --global dotnet-ef
+          }
+        shell: pwsh
+
+      - name: Apply database migrations
+        run: dotnet ef database update --project . --connection "$env:PATCHLAB_DB_CONNECTION"
+        shell: pwsh
+        env:
+          PATCHLAB_DB_CONNECTION: ${{ secrets.PATCHLAB_DB_CONNECTION }}
+      # --- end new ---
+
       - name: Start PatchlabWhatsAppBot service
         run: C:\nssm\win64\nssm.exe start PatchlabWhatsAppBot
 

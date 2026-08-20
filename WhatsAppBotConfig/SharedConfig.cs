@@ -20,6 +20,9 @@ public class SharedConfig
     [JsonPropertyName("SqlConnectionString")]
     public string SqlConnectionString { get; set; } = string.Empty;
 
+    [JsonPropertyName("RussellCellphoneNumber")]
+    public string RussellCellphoneNumber { get; set; } = "";
+
     public static SharedConfig Load()
     {
         if (!File.Exists(FileName))
