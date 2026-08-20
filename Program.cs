@@ -3,6 +3,7 @@ using PatchlabWhatsAppBot.Controllers;
 using PatchlabWhatsAppBot.Conversations;
 using PatchlabWhatsAppBot.Customers;
 using PatchlabWhatsAppBot.Data;
+using PatchlabWhatsAppBot.Staff;
 using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
 
@@ -19,6 +20,7 @@ builder.Services.Configure<MetaWhatsAppOptions>(options =>
     options.PhoneNumberId = sharedConfig.PhoneNumberId;
     options.AccessToken = sharedConfig.AccessToken;
     options.VerifyToken = sharedConfig.VerifyToken;
+    options.RussellCellphoneNumber = sharedConfig.RussellCellphoneNumber;
 });
 
 builder.Services.AddHttpClient<IWhatsAppSender, MetaWhatsAppSender>();
@@ -29,12 +31,20 @@ builder.Services.AddDbContext<PatchlabDbContext>(options =>
 
 builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<ICustomerRepository, CustomerRepository>();
-
-// TODO: replace with whatever already messages Russell (WhatsApp/mail) —
-// this stub just logs so the app compiles and runs in the meantime.
-builder.Services.AddScoped<IStaffNotifier, ConsoleStaffNotifier>();
+builder.Services.AddScoped<IStaffNotifier, WhatsAppStaffNotifier>();
 
 var app = builder.Build();
+
+// Apply any pending EF Core migrations on startup. Since this runs as a
+// single NSSM-hosted instance (not scaled out across multiple machines),
+// there's no risk of multiple instances racing to migrate at once — this
+// replaces the separate `dotnet ef database update` pipeline step, which
+// kept failing on CLI/build-output path issues in CI.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<PatchlabDbContext>();
+    db.Database.Migrate();
+}
 
 app.UseHttpsRedirection();
 
@@ -43,26 +53,3 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
-
-// Temporary stand-in — swap for the real Russell notifier.
-public class ConsoleStaffNotifier : IStaffNotifier
-{
-    private readonly ILogger<ConsoleStaffNotifier> _logger;
-
-    public ConsoleStaffNotifier(ILogger<ConsoleStaffNotifier> logger)
-    {
-        _logger = logger;
-    }
-
-    public Task NotifyNewTicketAsync(string ticketNumber, string issueText)
-    {
-        _logger.LogInformation("New ticket {TicketNumber}: {IssueText}", ticketNumber, issueText);
-        return Task.CompletedTask;
-    }
-
-    public Task NotifyUnhappyTicketAsync(string ticketNumber, string cellphoneNumber, string reason)
-    {
-        _logger.LogWarning("Unhappy ticket {TicketNumber} from {CellphoneNumber}: {Reason}", ticketNumber, cellphoneNumber, reason);
-        return Task.CompletedTask;
-    }
-}

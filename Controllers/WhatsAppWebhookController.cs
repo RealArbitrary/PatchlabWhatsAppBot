@@ -5,6 +5,7 @@ using PatchlabWhatsAppBot.Customers;
 using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
 using System.Text.Json;
+using PatchlabWhatsAppBot.Staff;
 
 namespace PatchlabWhatsAppBot.Controllers;
 
@@ -17,7 +18,7 @@ public class WhatsAppWebhookController : ControllerBase
     private readonly MetaWhatsAppOptions _options;
     private readonly ITicketRepository _tickets;
     private readonly ICustomerRepository _customers;
-    private readonly IStaffNotifier _staffNotifier; // messages Russell — swap for whatever you already use (WhatsApp/mail)
+    private readonly IStaffNotifier _staffNotifier; 
 
     public WhatsAppWebhookController(
         ConversationStore store,
@@ -344,10 +345,4 @@ public class WhatsAppWebhookController : ControllerBase
 
         _store.Reset(session.CellphoneNumber);
     }
-}
-
-public interface IStaffNotifier
-{
-    Task NotifyNewTicketAsync(string ticketNumber, string issueText);
-    Task NotifyUnhappyTicketAsync(string ticketNumber, string cellphoneNumber, string reason);
 }
