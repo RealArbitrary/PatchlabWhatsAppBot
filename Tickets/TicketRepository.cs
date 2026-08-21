@@ -48,12 +48,16 @@ public class TicketRepository : ITicketRepository
 
     public async Task<string?> GetLatestStatusCommentAsync(string ticketNumber)
     {
-        // Placeholder — wire this up to wherever ticket status comments
-        // actually live (looked like a separate server-side note in the
-        // handoff doc, e.g. "Ons wag vir parte"). For now, reflect the
-        // Status column so it's not a dead stub.
         var ticket = await _db.Tickets.FirstOrDefaultAsync(t => t.TicketNumber == ticketNumber);
-        return ticket?.Status;
+        if (ticket is null) return null;
+
+        var latestComment = await _db.TicketComments
+            .Where(c => c.TicketId == ticket.Id)
+            .OrderByDescending(c => c.CreatedAt)
+            .Select(c => c.Comment)
+            .FirstOrDefaultAsync();
+
+        return latestComment is null ? ticket.Status : $"{ticket.Status} - {latestComment}";
     }
 
     public async Task AddFeedbackAsync(string ticketNumber, string status, string? reason)

@@ -2,6 +2,14 @@
 
 namespace PatchlabWhatsAppBot.Data;
 
+public class TicketComment
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public string Comment { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
 public class ErrorLog
 {
     public int Id { get; set; }
@@ -51,9 +59,26 @@ public class PatchlabDbContext : DbContext
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<TicketFeedback> TicketFeedback => Set<TicketFeedback>();
     public DbSet<ErrorLog> ErrorLogs => Set<ErrorLog>();
+    public DbSet<TicketComment> TicketComments => Set<TicketComment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<TicketComment>(e =>
+        {
+            e.ToTable("TicketComments");
+            e.HasKey(c => c.Id);
+
+            e.Property(c => c.Comment).HasMaxLength(1000).IsRequired();
+            e.Property(c => c.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
+
+            e.HasOne<Ticket>()
+                .WithMany()
+                .HasForeignKey(c => c.TicketId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasIndex(c => c.TicketId).HasDatabaseName("IX_TicketComments_TicketId");
+        });
+
         modelBuilder.Entity<ErrorLog>(e =>
         {
             e.ToTable("ErrorLogs");
