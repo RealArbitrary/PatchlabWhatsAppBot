@@ -28,7 +28,9 @@ Log a ticket (known number) → card: "Use saved details" / "Update my details"
                              → skips straight to area (name/surname already known)
 
 Check on existing ticket    → card: list of this number's ticket IDs, each row shows "{Status} - {Issue}"
-                             → pulls latest status
+                             → pulls latest status, appended with the ticket's most recent comment if
+                               one exists (e.g. "Open - We cannot fix the printer at this time due to
+                               budgeting reasons")
                              → card: "I'm happy" / "Log another ticket" / "Not resolved to my liking"
                              → unhappy branch collects a reason, notifies staff via template (best-effort), and confirms to the teacher
 ```
@@ -64,6 +66,7 @@ Both controller call sites into `IStaffNotifier` are wrapped in try/catch with `
 - ASP.NET Core Web API, .NET 10
 - Meta WhatsApp Cloud API (Graph API `v21.0`, due for a bump to `v26.0` before Meta drops `v21.0` support)
 - SQL Server 2025, accessed via **EF Core** (migrated from Dapper — see "Database & migrations" below for why and how)
+- Custom `ILoggerProvider` (`DatabaseLoggerProvider`/`DatabaseLogger` in `Logging/`) writes Warning-and-above log entries to the `ErrorLogs` table, fire-and-forget, so production errors are queryable instead of vanishing with the console
 - In-memory `ConcurrentDictionary` based conversation store (POC grade, see Roadmap)
 - ngrok for local and production webhook tunneling
 - NSSM to run the bot as a Windows service in production (see "Deploying to a server" — this is the tooling currently in use, not a hard requirement of the project itself)
@@ -81,11 +84,14 @@ PatchlabWhatsAppBot/
 ├── Customers/
 │   └── CustomerRepository.cs          # ICustomerRepository, EF-backed — find/upsert the returning-customer profile
 ├── Tickets/
-│   └── TicketRepository.cs            # ITicketRepository, EF-backed — create tickets, list by number, latest status
+│   └── TicketRepository.cs            # ITicketRepository, EF-backed — create tickets, list by number, latest status + comment
 ├── Staff/
 │   └── WhatsAppStaffNotifier.cs       # IStaffNotifier — notifies staff on new tickets and unhappy-ticket reports via message templates
 ├── Data/
-│   └── PatchlabDbContext.cs           # EF Core DbContext + entity configuration for Tickets, Customers, and TicketFeedback
+│   └── PatchlabDbContext.cs           # EF Core DbContext + entity configuration for Tickets, Customers, TicketFeedback, TicketComments, ErrorLogs
+├── Logging/
+│   ├── DatabaseLoggerProvider.cs      # ILoggerProvider — hands out one DatabaseLogger per category
+│   └── DatabaseLogger.cs              # ILogger — writes Warning+ log entries to ErrorLogs, fire-and-forget
 ├── Migrations/                        # EF Core migrations, generated via Add-Migration — see "Database & migrations"
 ├── WhatsApp/
 │   ├── MetaWhatsAppOptions.cs         # bound config: PhoneNumberId, AccessToken, VerifyToken, staff notify number
@@ -108,6 +114,7 @@ CREATE TABLE Tickets (
     TicketNumber     AS ('TCKT-' + RIGHT('0000' + CAST(Id AS VARCHAR(10)), 4)) PERSISTED,
     CellphoneNumber  NVARCHAR(20)   NOT NULL,
     Issue            NVARCHAR(MAX)  NOT NULL,
+    Area             NVARCHAR(200)  NULL,
     CreatedAt        DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     Status           NVARCHAR(20)   NOT NULL DEFAULT 'Open'
 );
@@ -128,9 +135,27 @@ CREATE TABLE TicketFeedback (
     Reason      NVARCHAR(MAX)  NULL,      -- populated only for "Unhappy"
     CreatedAt   DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
+
+CREATE TABLE TicketComments (
+    Id          INT IDENTITY(1,1) PRIMARY KEY,
+    TicketId    INT             NOT NULL REFERENCES Tickets(Id) ON DELETE CASCADE,
+    Comment     NVARCHAR(1000)  NOT NULL,
+    CreatedAt   DATETIME2       NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
+CREATE TABLE ErrorLogs (
+    Id          INT IDENTITY(1,1) PRIMARY KEY,
+    Severity    NVARCHAR(20)    NOT NULL,  -- "Warning", "Error", "Critical"
+    Source      NVARCHAR(300)   NOT NULL,  -- logger category, e.g. the full controller class name
+    Message     NVARCHAR(MAX)   NOT NULL,
+    StackTrace  NVARCHAR(MAX)   NULL,
+    CreatedAt   DATETIME2       NOT NULL DEFAULT SYSUTCDATETIME()
+);
 ```
 
 `TicketNumber` is a persisted computed column derived from `Id`. There is no separate counter or sequence table, so there is no risk of formatting drift between this bot and `PatchlabTicketing`. `Customers` is keyed on `CellphoneNumber` and joins directly onto `Tickets.CellphoneNumber` — it exists purely so the bot can recognise a returning teacher and skip re-asking for their name and surname. `TicketFeedback` records the outcome of the "check on existing ticket" flow and is what the planned admin dashboard will surface (see Roadmap).
+
+`Tickets.Area` and `Customers.Area` are separate, independently-set values — `Customers.Area` is the "last known" area for a returning teacher, while `Tickets.Area` is whatever was given for that specific ticket, which can differ per ticket even for a known customer (see the comment in `TicketRepository.CreateTicketAsync`). `TicketComments` holds a running history of comments against a ticket; this bot only ever reads from it (`TicketRepository.GetLatestStatusCommentAsync` returns the ticket's `Status` with the most recent comment appended, e.g. `"Open - We cannot fix the printer at this time due to budgeting reasons"`). Comments are written by `PatchlabTicketing.Api`'s `TicketCommentRepository.AddAsync`, via the comment input and Save button in `TicketList.jsx`'s expanded row (see "Related projects"). `ErrorLogs` is written to by `DatabaseLoggerProvider`/`DatabaseLogger` (see Stack above) for any Warning-or-above log line raised anywhere in the app.
 
 The SQL connection string lives in `config.json`, under the `SqlConnectionString` key (see Configuration below). Authentication is Windows integrated auth. The account the bot's service runs under needs an explicit SQL Server login. If the service runs as `LocalSystem`, that identity presents to SQL Server as `NT AUTHORITY\SYSTEM` for local connections, not the machine account name.
 
@@ -214,7 +239,7 @@ The steps below are written generically since the exact hosting target may chang
 
 ## Related projects
 
-Ticket handling beyond "create a ticket row" (dashboard viewing, status updates, feedback review, the manual takeover reply tool) lives in a separate app, `PatchlabTicketing`, not in this repo. That app is an ASP.NET Core Web API plus React dashboard, reading and updating the same SQL database this bot writes to. An admin page and ticket-close functionality are planned there — see Roadmap.
+Ticket handling beyond "create a ticket row" (dashboard viewing, status updates, feedback review, the manual takeover reply tool) lives in a separate sibling project, `PatchlabTicketing.Api`, plus a React client, not in this repo. That app is Dapper-only (no EF Core, no `DbContext`) and reads/writes the same SQL database this bot writes to via raw SQL — for example, staff typing into the comment input on a ticket's expanded row in `TicketList.jsx` and clicking Save calls `PatchlabTicketing.Api`'s `TicketCommentRepository.AddAsync`, which is how rows land in `TicketComments` (this bot only ever reads that table, see "Data persistence" above). This bot is the only one of the two with a `DbContext`, so it owns **all** EF Core migrations and schema changes for the shared database — `PatchlabTicketing.Api` never runs a migration, it just adapts to whatever shape this project's migrations leave the tables in. An admin page and ticket-close functionality are planned there — see Roadmap.
 
 The two apps do not talk to each other over HTTP. The database is the interface. This bot has zero new endpoints or CORS surface as a result. The tradeoff is that dashboard updates are not instant, `PatchlabTicketing` polls the database every few seconds rather than receiving a push notification when a new ticket is written. That was a deliberate choice, not a placeholder, live push (SignalR) was considered and declined for now.
 
@@ -226,7 +251,7 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 
 - `.NET 10`'s built in OpenAPI support currently fails to compile against `Microsoft.OpenApi` 3.x (`CS0200`). Pin to `Microsoft.OpenApi 2.3.9`, or drop Swagger entirely, it isn't adding value on a webhook only service.
 - Meta's webhook GET verification (`hub.challenge`) must be echoed back as plain text, not wrapped in JSON.
-- Meta enforces a 24 hour customer service window: free form text replies are only allowed within 24 hours of the customer's last message. Outside that window, business initiated messages require pre approved templates. This does not affect the customer-facing bot flow, since customers always message in first — **but it does affect staff notifications**, since staff don't message the bot on a regular schedule and fall outside the window almost all the time. That's why staff notifications go through message templates instead of free text (see "Staff notifications & message templates" above). Unhandled, a rejected send here can also fail silently: `EnsureSuccessStatusCode()` throws, but nothing writes that exception anywhere visible unless a logging provider like Windows Event Log is explicitly configured (see Roadmap) — this is why staff notifications went unnoticed as broken for an extended period before being diagnosed.
+- Meta enforces a 24 hour customer service window: free form text replies are only allowed within 24 hours of the customer's last message. Outside that window, business initiated messages require pre approved templates. This does not affect the customer-facing bot flow, since customers always message in first — **but it does affect staff notifications**, since staff don't message the bot on a regular schedule and fall outside the window almost all the time. That's why staff notifications go through message templates instead of free text (see "Staff notifications & message templates" above). A rejected send here (`EnsureSuccessStatusCode()` throwing) is now caught and logged via `ILogger`, which the `DatabaseLoggerProvider` persists to `ErrorLogs` — this closes the gap that let staff notifications go unnoticed as broken for an extended period before being diagnosed.
 - Meta's "service conversations" (replying to inbound messages) are currently free, but Meta has a pricing change coming October 1, 2026 making service/utility messages inside the customer service window chargeable.
 - Unverified Cloud API apps are capped at 250 unique customers messaged per rolling 24 hours. Business Verification removes this cap, not yet done, deferred until/unless the limit is hit.
 - WhatsApp interactive button messages cap out at 3 buttons, 20 characters each; interactive lists cap at 10 rows, 24 characters per title, 72 per description. Sending more/longer than that will be rejected by the Graph API.
@@ -244,14 +269,12 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 - [ ] CI/CD deploy ordering flaw, a failed `dotnet publish` leaves the service stopped indefinitely with no alert. Applies to this project, `PatchlabNgrokSync`, and `PatchlabTicketing`.
 - [ ] Replace the in memory `ConversationStore` with persistent storage, it is currently wiped on every service restart.
 - [ ] Read and log Meta's error response body on send failures instead of letting `EnsureSuccessStatusCode()` throw blind.
-- [ ] **Configure a real logging provider (e.g. `AddEventLog()`)** so unhandled exceptions and logged errors actually surface somewhere visible in production — currently not confirmed to be wired up, and its absence is why a staff-notification failure went undiagnosed for an extended period.
-- [ ] **Admin/error dashboard** in `PatchlabTicketing` — surface ticket feedback (`TicketFeedback` joined against `Tickets`) and, once the logging gap above is closed, recent errors. Also a natural place to surface messaging-tier usage (see next item).
+- [ ] **Admin/error dashboard** in `PatchlabTicketing` — surface ticket feedback (`TicketFeedback` joined against `Tickets`) and recent errors from `ErrorLogs`. Also a natural place to surface messaging-tier usage (see next item).
 - [ ] **Query current WhatsApp messaging tier/usage** from the Graph API and surface it in the admin dashboard, so the 250-unique-customers-per-24h cap (see gotchas) can be watched proactively rather than discovered by hitting it.
 - [ ] **Ticket close functionality**: add a `CloseTicketAsync`-style method to `ITicketRepository`/`TicketRepository` (no way to change `Status` currently exists) and wire it to `PatchlabTicketing`'s existing "Close" action.
 - [ ] Replace manual `JsonElement` parsing of Meta's webhook payload with strongly typed DTOs and `TryGetProperty` guards throughout.
 - [ ] Bump Graph API calls from `v21.0` to `v26.0` before Meta removes `v21.0` support.
 - [ ] Switch this service's process-manager account off `LocalSystem`/equivalent to a dedicated least privilege account. Should happen before going live, does not affect day to day development.
-- [ ] Wire `Tickets.GetLatestStatusCommentAsync` to wherever ticket status comments actually live, rather than the current placeholder reflecting the `Status` column directly.
 - [ ] Two-step name/surname prompt (or smarter splitting) — the current naive `Split(' ', 2)` in `HandleNameAsync` breaks compound first names (e.g. "De Wet van der Merwe" → FirstName "De").
 - [ ] Make the deploy pipeline's NSSM start-check tolerant of transient `SERVICE_START_PENDING` (short retry/wait loop instead of a single immediate check).
 - [ ] Remove the dead `MetaWhatsAppOptions.SectionName` code, cosmetic, low priority.
