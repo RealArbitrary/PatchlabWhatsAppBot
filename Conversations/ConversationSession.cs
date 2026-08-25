@@ -1,4 +1,6 @@
-﻿namespace PatchlabWhatsAppBot.Conversations;
+﻿using PatchlabWhatsAppBot.Data;
+
+namespace PatchlabWhatsAppBot.Conversations;
 
 public class ConversationSession
 {
@@ -9,6 +11,7 @@ public class ConversationSession
     public string? LastName { get; set; }
     public string? Area { get; set; }
     public string? IssueText { get; set; }
+    public TicketType? TicketType { get; set; }
 
     public bool DetailsFromSavedProfile { get; set; }
 

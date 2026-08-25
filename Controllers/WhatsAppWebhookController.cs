@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Options;
 using PatchlabWhatsAppBot.Conversations;
 using PatchlabWhatsAppBot.Customers;
+using PatchlabWhatsAppBot.Data;
 using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
 using System.Text.Json;
@@ -138,6 +139,10 @@ public class WhatsAppWebhookController : ControllerBase
                 await HandleStartChoiceAsync(session, input);
                 break;
 
+            case ConversationState.AwaitingTicketType:
+                await HandleTicketTypeChoiceAsync(session, input);
+                break;
+
             case ConversationState.AwaitingReturningCustomerChoice:
                 await HandleReturningCustomerChoiceAsync(session, input);
                 break;
@@ -198,7 +203,7 @@ public class WhatsAppWebhookController : ControllerBase
             {
                 await _sender.SendTextMessageAsync(session.CellphoneNumber,
                     "You don't have any tickets logged yet. Let's log one.");
-                await BeginLogTicketAsync(session);
+                await SendTicketTypeChoiceAsync(session);
                 return;
             }
 
@@ -215,10 +220,44 @@ public class WhatsAppWebhookController : ControllerBase
         }
 
         // Default / "log_ticket"
-        await BeginLogTicketAsync(session);
+        await SendTicketTypeChoiceAsync(session);
     }
 
-    // ---- Log a ticket (returning-customer shortcut lives here) ----------
+    // ---- Log a ticket (ticket type is required before anything else, then
+    // the returning-customer shortcut lives here) -------------------------
+
+    private async Task SendTicketTypeChoiceAsync(ConversationSession session)
+    {
+        session.State = ConversationState.AwaitingTicketType;
+        await _sender.SendButtonsAsync(
+            session.CellphoneNumber,
+            "What type of ticket is this?",
+            new[]
+            {
+                new WhatsAppButton("ticket_type_it", "IT Ticket"),
+                new WhatsAppButton("ticket_type_herstelwerk", "Herstelwerk Ticket")
+            });
+    }
+
+    private async Task HandleTicketTypeChoiceAsync(ConversationSession session, string input)
+    {
+        session.TicketType = input switch
+        {
+            "ticket_type_it" => TicketType.IT,
+            "ticket_type_herstelwerk" => TicketType.Herstelwerk,
+            _ => (TicketType?)null
+        };
+
+        if (session.TicketType is null)
+        {
+            // Required, no skip — anything that isn't a recognised button id
+            // (e.g. stray free text) re-asks instead of advancing the flow.
+            await SendTicketTypeChoiceAsync(session);
+            return;
+        }
+
+        await BeginLogTicketAsync(session);
+    }
 
     private async Task BeginLogTicketAsync(ConversationSession session)
     {
@@ -302,7 +341,8 @@ public class WhatsAppWebhookController : ControllerBase
             session.IssueText,
             session.FirstName ?? "",
             session.LastName ?? "",
-            session.Area ?? "");
+            session.Area ?? "",
+            session.TicketType!.Value); // required and set by HandleTicketTypeChoiceAsync before this state is reachable
 
         // Keep the Customers table current whether they typed fresh
         // details, confirmed saved ones, or updated them — this is what
@@ -355,7 +395,7 @@ public class WhatsAppWebhookController : ControllerBase
         switch (input)
         {
             case "log_another":
-                await BeginLogTicketAsync(session);
+                await SendTicketTypeChoiceAsync(session);
                 break;
 
             case "unhappy":

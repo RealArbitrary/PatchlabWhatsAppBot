@@ -5,7 +5,7 @@ namespace PatchlabWhatsAppBot.Tickets;
 
 public interface ITicketRepository
 {
-    Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area);
+    Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area, TicketType ticketType);
     Task<List<Ticket>> GetTicketsByCellphoneAsync(string cellphoneNumber);
     Task<string?> GetLatestStatusCommentAsync(string ticketNumber);
     Task AddFeedbackAsync(string ticketNumber, string status, string? reason);
@@ -20,7 +20,7 @@ public class TicketRepository : ITicketRepository
         _db = db;
     }
 
-    public async Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area)
+    public async Task<Ticket> CreateTicketAsync(string cellphoneNumber, string issueText, string firstName, string lastName, string area, TicketType ticketType)
     {
         // name/surname are upserted into Customers by the controller right after
         // this call, not stored on the Ticket itself. Area, however, is stored on
@@ -31,6 +31,7 @@ public class TicketRepository : ITicketRepository
             CellphoneNumber = cellphoneNumber,
             Issue = issueText,
             Area = area,
+            TicketType = ticketType,
         };
 
         _db.Tickets.Add(ticket);
