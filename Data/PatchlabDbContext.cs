@@ -29,6 +29,7 @@ public class Ticket
     public string? Area { get; set; }
     public DateTime CreatedAt { get; set; }
     public string Status { get; set; } = "Open";
+    public DateTime? ResolvedAt { get; set; }
 }
 
 public class Customer
@@ -108,6 +109,7 @@ public class PatchlabDbContext : DbContext
             e.Property(t => t.Area).HasMaxLength(200);
             e.Property(t => t.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
             e.Property(t => t.Status).HasMaxLength(20).HasDefaultValue("Open");
+            e.Property(t => t.ResolvedAt);
 
             e.HasIndex(t => t.CellphoneNumber).HasDatabaseName("IX_Tickets_CellphoneNumber");
         });

@@ -116,7 +116,8 @@ CREATE TABLE Tickets (
     Issue            NVARCHAR(MAX)  NOT NULL,
     Area             NVARCHAR(200)  NULL,
     CreatedAt        DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
-    Status           NVARCHAR(20)   NOT NULL DEFAULT 'Open'
+    Status           NVARCHAR(20)   NOT NULL DEFAULT 'Open',
+    ResolvedAt       DATETIME2      NULL
 );
 
 CREATE TABLE Customers (
@@ -155,7 +156,7 @@ CREATE TABLE ErrorLogs (
 
 `TicketNumber` is a persisted computed column derived from `Id`. There is no separate counter or sequence table, so there is no risk of formatting drift between this bot and `PatchlabTicketing`. `Customers` is keyed on `CellphoneNumber` and joins directly onto `Tickets.CellphoneNumber` — it exists purely so the bot can recognise a returning teacher and skip re-asking for their name and surname. `TicketFeedback` records the outcome of the "check on existing ticket" flow and is what the planned admin dashboard will surface (see Roadmap).
 
-`Tickets.Area` and `Customers.Area` are separate, independently-set values — `Customers.Area` is the "last known" area for a returning teacher, while `Tickets.Area` is whatever was given for that specific ticket, which can differ per ticket even for a known customer (see the comment in `TicketRepository.CreateTicketAsync`). `TicketComments` holds a running history of comments against a ticket; this bot only ever reads from it (`TicketRepository.GetLatestStatusCommentAsync` returns the ticket's `Status` with the most recent comment appended, e.g. `"Open - We cannot fix the printer at this time due to budgeting reasons"`). Comments are written by `PatchlabTicketing.Api`'s `TicketCommentRepository.AddAsync`, via the comment input and Save button in `TicketList.jsx`'s expanded row (see "Related projects"). `ErrorLogs` is written to by `DatabaseLoggerProvider`/`DatabaseLogger` (see Stack above) for any Warning-or-above log line raised anywhere in the app.
+`Tickets.Area` and `Customers.Area` are separate, independently-set values — `Customers.Area` is the "last known" area for a returning teacher, while `Tickets.Area` is whatever was given for that specific ticket, which can differ per ticket even for a known customer (see the comment in `TicketRepository.CreateTicketAsync`). `TicketComments` holds a running history of comments against a ticket; this bot only ever reads from it (`TicketRepository.GetLatestStatusCommentAsync` returns the ticket's `Status` with the most recent comment appended, e.g. `"Open - We cannot fix the printer at this time due to budgeting reasons"`). Comments are written by `PatchlabTicketing.Api`'s `TicketCommentRepository.AddAsync`, via the comment input and Save button in `TicketList.jsx`'s expanded row (see "Related projects"). `ErrorLogs` is written to by `DatabaseLoggerProvider`/`DatabaseLogger` (see Stack above) for any Warning-or-above log line raised anywhere in the app. `Tickets.ResolvedAt` is nullable and schema-only from this bot's side — nothing here ever sets it; stamping it is `PatchlabTicketing.Api`'s responsibility (see "Related projects").
 
 The SQL connection string lives in `config.json`, under the `SqlConnectionString` key (see Configuration below). Authentication is Windows integrated auth. The account the bot's service runs under needs an explicit SQL Server login. If the service runs as `LocalSystem`, that identity presents to SQL Server as `NT AUTHORITY\SYSTEM` for local connections, not the machine account name.
 
