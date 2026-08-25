@@ -364,3 +364,7 @@ FodyWeavers.xsd
 
 # Config JSON for Meta Graph API
 config.json
+
+# Ticket photos saved by the bot at runtime (see Storage/TicketPhotoStorage.cs) —
+# real user-uploaded content, never committed.
+TicketPhotos/

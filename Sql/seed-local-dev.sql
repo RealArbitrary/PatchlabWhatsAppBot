@@ -52,11 +52,13 @@ BEGIN TRANSACTION;
 -- ---- Wipe existing data (children first) -----------------------------------
 DELETE FROM TicketComments;
 DELETE FROM TicketFeedback;
+DELETE FROM TicketPhotos;
 DELETE FROM Tickets;
 DELETE FROM Customers;
 
 DBCC CHECKIDENT ('TicketComments', RESEED, 0);
 DBCC CHECKIDENT ('TicketFeedback', RESEED, 0);
+DBCC CHECKIDENT ('TicketPhotos', RESEED, 0);
 DBCC CHECKIDENT ('Tickets', RESEED, 0);
 
 -- ---- Customers ---------------------------------------------------------
@@ -132,11 +134,25 @@ FROM (VALUES
 ) AS f(TicketNumber, Status, Reason, CreatedAt)
 JOIN Tickets t ON t.TicketNumber = f.TicketNumber;
 
+-- ---- TicketPhotos -----------------------------------------------------------
+-- Placeholder paths only (nothing actually written to disk by this script) —
+-- just enough rows for the eventual GUI-side work to have something to query.
+-- Path shape matches TicketPhotoStorage's real layout: TicketPhotos/yyyy/MM/dd/<guid>.<ext>.
+INSERT INTO TicketPhotos (TicketId, FilePath, CreatedAt)
+SELECT t.Id, p.FilePath, p.CreatedAt
+FROM (VALUES
+    (N'TCKT-0001', N'2026/08/18/11111111-1111-1111-1111-111111111111.jpeg', DATEADD(DAY, -9, SYSUTCDATETIME())),
+    (N'TCKT-0001', N'2026/08/18/22222222-2222-2222-2222-222222222222.jpeg', DATEADD(DAY, -9, SYSUTCDATETIME())),
+    (N'TCKT-0009', N'2026/08/21/33333333-3333-3333-3333-333333333333.jpeg', DATEADD(DAY, -4, SYSUTCDATETIME()))
+) AS p(TicketNumber, FilePath, CreatedAt)
+JOIN Tickets t ON t.TicketNumber = p.TicketNumber;
+
 COMMIT TRANSACTION;
 
 PRINT 'Seed complete.';
 SELECT (SELECT COUNT(*) FROM Customers) AS Customers,
        (SELECT COUNT(*) FROM Tickets) AS Tickets,
        (SELECT COUNT(*) FROM TicketComments) AS TicketComments,
-       (SELECT COUNT(*) FROM TicketFeedback) AS TicketFeedback;
+       (SELECT COUNT(*) FROM TicketFeedback) AS TicketFeedback,
+       (SELECT COUNT(*) FROM TicketPhotos) AS TicketPhotos;
 GO

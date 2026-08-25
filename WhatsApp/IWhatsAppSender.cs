@@ -28,8 +28,19 @@ public interface IWhatsAppSender
     /// for staff notifications, since Russell doesn't message the bot himself.
     /// </summary>
     Task SendTemplateMessageAsync(string to, string templateName, string languageCode, IReadOnlyList<string> bodyParameters);
+
+    /// <summary>
+    /// Downloads inbound media (e.g. a photo attached to a message) by its
+    /// WhatsApp media ID. Meta's media URLs are short-lived and require the
+    /// same bearer token as everything else, so this does the two-step
+    /// lookup-then-download itself rather than handing back a URL to fetch
+    /// later — by the time "later" arrives, that URL may already be dead.
+    /// </summary>
+    Task<WhatsAppMedia> DownloadMediaAsync(string mediaId);
 }
 
 public record WhatsAppButton(string Id, string Title);
 
 public record WhatsAppListRow(string Id, string Title, string? Description = null);
+
+public record WhatsAppMedia(byte[] Content, string MimeType);

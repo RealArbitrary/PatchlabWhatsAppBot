@@ -20,12 +20,16 @@ Separately, the bot notifies a staff member (Russell) on new tickets and on "not
 ```
 "hi"                       → card: "Log a ticket" / "Check on existing ticket"
 
-Log a ticket (new number)  → asks name/surname → area → issue description
-                            → ticket created, confirmation sent (includes ticket number)
-                            → staff notified via template message (best-effort, never blocks the reply above)
+Log a ticket                → card: "IT Ticket" / "Herstelwerk Ticket" (required, no skip)
+
+Log a ticket (new number)   → asks name/surname → area → issue description
+                             → card: "Would you like to attach any photos?" (see "Ticket photos" below)
+                             → ticket created, confirmation sent (includes ticket number)
+                             → staff notified via template message (best-effort, never blocks the reply above)
 
 Log a ticket (known number) → card: "Use saved details" / "Update my details"
                              → skips straight to area (name/surname already known)
+                             → ...same issue description → photo prompt → ticket creation as above
 
 Check on existing ticket    → card: list of this number's ticket IDs, each row shows "{Status} - {Issue}"
                              → pulls latest status, appended with the ticket's most recent comment if
@@ -36,6 +40,21 @@ Check on existing ticket    → card: list of this number's ticket IDs, each row
 ```
 
 Returning numbers are recognised via the `Customers` table (see Data persistence below), so a teacher who has logged a ticket before never has to retype their name and surname — only re-confirm or update it.
+
+## Ticket photos
+
+Right after the issue description, and before the ticket is actually created, the bot asks "Would you like to attach any photos?" (`AwaitingPhotoChoice`). Declining proceeds exactly as before, zero photos attached. Accepting moves to `AwaitingPhotos`, governed by two independent timers in `PhotoWaitCoordinator`:
+
+- **Initial wait (90s)**, started the moment the user says yes. If it elapses with nothing received, the bot sends "No worries, continuing without photos." and creates the ticket with none — same as declining.
+- **Debounce (10s)**, (re)started every time a photo actually arrives. Once it elapses with no further photo, the ticket is created with whatever was collected. The debounce timer entirely replaces the initial wait the moment the first photo lands — from then on, only it governs completion, however many photos come in.
+
+Because these timers must resolve on their own (nothing forces the user to send another message), they're real wall-clock `System.Threading.Timer`s, not something driven by the next webhook call — the callback fires with no HTTP request behind it, so it resolves its own DI scope to reach `PendingTicketFinalizer` (the extracted "create the ticket, attach photos, notify staff, confirm, reset" logic shared by both the immediate-decline path and the timer-driven path). A global reset (e.g. the user types "hi" mid-wait) cancels any running timer for that number, so it can't fire later against a session that's already moved on.
+
+The ticket doesn't exist yet while photos are arriving — each incoming photo is downloaded and saved to disk immediately (see below) and its relative path queued on `ConversationSession.PendingPhotoPaths`; those paths only become real `TicketPhotos` rows once the ticket is actually created and its ID is known.
+
+**Storage**: photos are saved to disk under `TicketPhotos/yyyy/MM/dd/<guid>.<ext>` (e.g. `TicketPhotos/2026/08/25/3fa85f64-5717-4562-b3fc-2c963f66afa6.jpeg`), relative to the app's working directory — the same place `config.json` lives. Grouped by date rather than by ticket ID specifically because the ticket ID doesn't exist yet when the first photo arrives. The extension is derived from Meta's reported mime type, not trusted/reused from anything WhatsApp sends as a filename. The filename itself is always a fresh GUID — collision-proof by construction, and deliberately never derived from anything the sender provided. Only the path relative to that root is ever written to `TicketPhotos.FilePath` in SQL; the bytes never touch the database. `TicketPhotos/` is gitignored.
+
+**Download**: WhatsApp's webhook payload for an image message carries only a short-lived media ID, not the file itself or a durable URL. `IWhatsAppSender.DownloadMediaAsync` does the two-step Graph API dance this requires: `GET /{media-id}` to resolve a CDN URL + mime type, then an immediate authenticated `GET` on that URL for the actual bytes — the URL is bearer-token-gated and expires, so it's fetched straight away rather than stored for later.
 
 ## Staff notifications & message templates
 
@@ -79,24 +98,28 @@ PatchlabWhatsAppBot/
 │   └── WhatsAppWebhookController.cs   # GET verification handshake + POST message handling, full state machine
 ├── Conversations/
 │   ├── ConversationState.cs           # enum of every state in the flow above
-│   ├── ConversationSession.cs         # per-number session: state, collected name/surname/area/issue, selected ticket
-│   └── ConversationStore.cs           # in-memory store keyed by phone number
+│   ├── ConversationSession.cs         # per-number session: state, collected name/surname/area/issue/ticket type, pending photo paths, selected ticket
+│   ├── ConversationStore.cs           # in-memory store keyed by phone number
+│   ├── PhotoWaitCoordinator.cs        # per-number background timers governing the optional photo-attach step (see below)
+│   └── PendingTicketFinalizer.cs      # the actual "create ticket + notify + confirm" logic, callable from a request or from a timer callback
 ├── Customers/
 │   └── CustomerRepository.cs          # ICustomerRepository, EF-backed — find/upsert the returning-customer profile
 ├── Tickets/
-│   └── TicketRepository.cs            # ITicketRepository, EF-backed — create tickets, list by number, latest status + comment
+│   └── TicketRepository.cs            # ITicketRepository, EF-backed — create tickets, list by number, latest status + comment, attach photos
 ├── Staff/
 │   └── WhatsAppStaffNotifier.cs       # IStaffNotifier — notifies staff on new tickets and unhappy-ticket reports via message templates
+├── Storage/
+│   └── TicketPhotoStorage.cs          # ITicketPhotoStorage — saves downloaded ticket photos to disk, returns the relative path stored in SQL
 ├── Data/
-│   └── PatchlabDbContext.cs           # EF Core DbContext + entity configuration for Tickets, Customers, TicketFeedback, TicketComments, ErrorLogs
+│   └── PatchlabDbContext.cs           # EF Core DbContext + entity configuration for Tickets, Customers, TicketFeedback, TicketComments, TicketPhotos, ErrorLogs
 ├── Logging/
 │   ├── DatabaseLoggerProvider.cs      # ILoggerProvider — hands out one DatabaseLogger per category
 │   └── DatabaseLogger.cs              # ILogger — writes Warning+ log entries to ErrorLogs, fire-and-forget
 ├── Migrations/                        # EF Core migrations, generated via Add-Migration — see "Database & migrations"
 ├── WhatsApp/
 │   ├── MetaWhatsAppOptions.cs         # bound config: PhoneNumberId, AccessToken, VerifyToken, staff notify number
-│   ├── IWhatsAppSender.cs             # text + interactive button/list sends, plus pre-approved template sends
-│   └── MetaWhatsAppSender.cs          # sends replies via graph.facebook.com
+│   ├── IWhatsAppSender.cs             # text + interactive button/list sends, pre-approved template sends, inbound media download
+│   └── MetaWhatsAppSender.cs          # sends replies via graph.facebook.com, downloads inbound media (see "Ticket photos" below)
 └── Program.cs
 ```
 
@@ -117,7 +140,8 @@ CREATE TABLE Tickets (
     Area             NVARCHAR(200)  NULL,
     CreatedAt        DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     Status           NVARCHAR(20)   NOT NULL DEFAULT 'Open',
-    ResolvedAt       DATETIME2      NULL
+    ResolvedAt       DATETIME2      NULL,
+    TicketType       INT            NOT NULL  -- EF enum: 0 = IT, 1 = Herstelwerk
 );
 
 CREATE TABLE Customers (
@@ -141,6 +165,13 @@ CREATE TABLE TicketComments (
     Id          INT IDENTITY(1,1) PRIMARY KEY,
     TicketId    INT             NOT NULL REFERENCES Tickets(Id) ON DELETE CASCADE,
     Comment     NVARCHAR(1000)  NOT NULL,
+    CreatedAt   DATETIME2       NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
+CREATE TABLE TicketPhotos (
+    Id          INT IDENTITY(1,1) PRIMARY KEY,
+    TicketId    INT             NOT NULL REFERENCES Tickets(Id) ON DELETE CASCADE,
+    FilePath    NVARCHAR(400)   NOT NULL,  -- relative to the TicketPhotos/ storage root, never absolute
     CreatedAt   DATETIME2       NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
@@ -171,7 +202,7 @@ CREATE TABLE DeletedTickets (
 
 `TicketNumber` is a persisted computed column derived from `Id`. There is no separate counter or sequence table, so there is no risk of formatting drift between this bot and `PatchlabTicketing`. `Customers` is keyed on `CellphoneNumber` and joins directly onto `Tickets.CellphoneNumber` — it exists purely so the bot can recognise a returning teacher and skip re-asking for their name and surname. `TicketFeedback` records the outcome of the "check on existing ticket" flow and is what the planned admin dashboard will surface (see Roadmap).
 
-`Tickets.Area` and `Customers.Area` are separate, independently-set values — `Customers.Area` is the "last known" area for a returning teacher, while `Tickets.Area` is whatever was given for that specific ticket, which can differ per ticket even for a known customer (see the comment in `TicketRepository.CreateTicketAsync`). `TicketComments` holds a running history of comments against a ticket; this bot only ever reads from it (`TicketRepository.GetLatestStatusCommentAsync` returns the ticket's `Status` with the most recent comment appended, e.g. `"Open - We cannot fix the printer at this time due to budgeting reasons"`). Comments are written by `PatchlabTicketing.Api`'s `TicketCommentRepository.AddAsync`, via the comment input and Save button in `TicketList.jsx`'s expanded row (see "Related projects"). `ErrorLogs` is written to by `DatabaseLoggerProvider`/`DatabaseLogger` (see Stack above) for any Warning-or-above log line raised anywhere in the app. `Tickets.ResolvedAt` is nullable and schema-only from this bot's side — nothing here ever sets it; stamping it is `PatchlabTicketing.Api`'s responsibility (see "Related projects").
+`Tickets.Area` and `Customers.Area` are separate, independently-set values — `Customers.Area` is the "last known" area for a returning teacher, while `Tickets.Area` is whatever was given for that specific ticket, which can differ per ticket even for a known customer (see the comment in `TicketRepository.CreateTicketAsync`). `TicketComments` holds a running history of comments against a ticket; this bot only ever reads from it (`TicketRepository.GetLatestStatusCommentAsync` returns the ticket's `Status` with the most recent comment appended, e.g. `"Open - We cannot fix the printer at this time due to budgeting reasons"`). Comments are written by `PatchlabTicketing.Api`'s `TicketCommentRepository.AddAsync`, via the comment input and Save button in `TicketList.jsx`'s expanded row (see "Related projects"). `ErrorLogs` is written to by `DatabaseLoggerProvider`/`DatabaseLogger` (see Stack above) for any Warning-or-above log line raised anywhere in the app. `Tickets.ResolvedAt` is nullable and schema-only from this bot's side — nothing here ever sets it; stamping it is `PatchlabTicketing.Api`'s responsibility (see "Related projects"). `TicketPhotos` holds one row per photo attached via the WhatsApp flow — see "Ticket photos" below for the full capture flow and where the actual image bytes live.
 
 `DeletedTickets` is a standalone archive table for `PatchlabTicketing.Api`'s ticket hard-delete feature (no FK back to `Tickets`/`TicketComments`/`TicketFeedback` — those live rows are gone by the time a row lands here; `TicketId` just preserves the original `Tickets.Id` for reference). It was originally created by a hand-run `.sql` script directly in `PatchlabTicketing.Api`, which violated this repo's ownership of shared-database schema and had no path to production — the table only ever existed on whichever machine someone ran the script against by hand, which is why the hard-delete feature shipped broken in production (`SqlException: Invalid object name 'DeletedTickets'`). It's now owned here instead, via the `AddDeletedTicketsTable` EF migration, same pattern as `ResolvedAt`'s `AddResolvedAtToTickets` — so it's created automatically by `db.Database.Migrate()` on deploy, no manual step required. The original `PatchlabTicketing.Api/Sql/001_create_deleted_tickets.sql` should be considered retired/superseded once this migration has been deployed. Its sibling scripts — `002_purge_deleted_tickets_proc.sql` (the nightly-purge stored procedure) and `003_purge_deleted_tickets_agent_job.sql` (the SQL Agent job that calls it) — have moved here too, as `Sql/002_purge_deleted_tickets_proc.sql` and `Sql/003_purge_deleted_tickets_agent_job.sql`, unchanged. They're retention tooling for `DeletedTickets`, not application schema, so they deliberately stay as plain `.sql` rather than becoming part of an EF migration — a stored procedure and a server-level SQL Agent job aren't things EF Core models, and a nightly purge job isn't something `db.Database.Migrate()` should be silently re-registering on every deploy. **Unlike the EF migration above, these two are not auto-applied by anything** — same manual-run caveat as `Sql/seed-local-dev.sql` (see "Local dev seed data"): run `002_purge_deleted_tickets_proc.sql` by hand against `Patchlab` to create/update the stored procedure, then `003_purge_deleted_tickets_agent_job.sql` by hand against `msdb` on the instance hosting it, once per environment.
 
@@ -302,6 +333,7 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 ## Roadmap
 
 - [ ] **"Other clients" branch**, routing non LSF senders into existing client with an issue versus new client looking for something flows. Should be designed with the eventual manual takeover flow (now in `PatchlabTicketing`) in mind.
+- [ ] **GUI display of ticket photos** in `PatchlabTicketing` — `TicketPhotos` rows and the files under `TicketPhotos/` exist and are populated by this bot, but nothing on the dashboard side surfaces them yet. Deliberately out of scope here; a follow-up once this is deployed and confirmed working in production.
 - [ ] Actual server hosting environment for this bot (currently still on the original dev-adjacent machine) — migrate following the generic steps above once the target is chosen.
 - [ ] CI/CD deploy ordering flaw, a failed `dotnet publish` leaves the service stopped indefinitely with no alert. Applies to this project, `PatchlabNgrokSync`, and `PatchlabTicketing`.
 - [ ] Replace the in memory `ConversationStore` with persistent storage, it is currently wiped on every service restart.

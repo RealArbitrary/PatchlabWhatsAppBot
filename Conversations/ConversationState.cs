@@ -9,6 +9,8 @@ public enum ConversationState
     AwaitingName,
     AwaitingArea,
     AwaitingIssue,
+    AwaitingPhotoChoice,
+    AwaitingPhotos,
     AwaitingTicketSelection,
     AwaitingTicketFeedback,
     AwaitingUnhappyReason
