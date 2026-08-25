@@ -152,11 +152,28 @@ CREATE TABLE ErrorLogs (
     StackTrace  NVARCHAR(MAX)   NULL,
     CreatedAt   DATETIME2       NOT NULL DEFAULT SYSUTCDATETIME()
 );
+
+CREATE TABLE DeletedTickets (
+    ArchiveId        INT IDENTITY(1,1) PRIMARY KEY,
+    TicketId         INT             NOT NULL,  -- original Tickets.Id; not a FK, that row is gone
+    TicketNumber     VARCHAR(9)      NULL,
+    CellphoneNumber  NVARCHAR(40)    NOT NULL,
+    Issue            NVARCHAR(MAX)   NOT NULL,
+    Area             NVARCHAR(400)   NULL,
+    CreatedAt        DATETIME2       NOT NULL,
+    ResolvedAt       DATETIME2       NULL,
+    Status           NVARCHAR(40)    NOT NULL,
+    CommentsJson     NVARCHAR(MAX)   NULL,
+    FeedbackJson     NVARCHAR(MAX)   NULL,
+    DeletedAt        DATETIME2       NOT NULL DEFAULT GETUTCDATE()
+);
 ```
 
 `TicketNumber` is a persisted computed column derived from `Id`. There is no separate counter or sequence table, so there is no risk of formatting drift between this bot and `PatchlabTicketing`. `Customers` is keyed on `CellphoneNumber` and joins directly onto `Tickets.CellphoneNumber` — it exists purely so the bot can recognise a returning teacher and skip re-asking for their name and surname. `TicketFeedback` records the outcome of the "check on existing ticket" flow and is what the planned admin dashboard will surface (see Roadmap).
 
 `Tickets.Area` and `Customers.Area` are separate, independently-set values — `Customers.Area` is the "last known" area for a returning teacher, while `Tickets.Area` is whatever was given for that specific ticket, which can differ per ticket even for a known customer (see the comment in `TicketRepository.CreateTicketAsync`). `TicketComments` holds a running history of comments against a ticket; this bot only ever reads from it (`TicketRepository.GetLatestStatusCommentAsync` returns the ticket's `Status` with the most recent comment appended, e.g. `"Open - We cannot fix the printer at this time due to budgeting reasons"`). Comments are written by `PatchlabTicketing.Api`'s `TicketCommentRepository.AddAsync`, via the comment input and Save button in `TicketList.jsx`'s expanded row (see "Related projects"). `ErrorLogs` is written to by `DatabaseLoggerProvider`/`DatabaseLogger` (see Stack above) for any Warning-or-above log line raised anywhere in the app. `Tickets.ResolvedAt` is nullable and schema-only from this bot's side — nothing here ever sets it; stamping it is `PatchlabTicketing.Api`'s responsibility (see "Related projects").
+
+`DeletedTickets` is a standalone archive table for `PatchlabTicketing.Api`'s ticket hard-delete feature (no FK back to `Tickets`/`TicketComments`/`TicketFeedback` — those live rows are gone by the time a row lands here; `TicketId` just preserves the original `Tickets.Id` for reference). It was originally created by a hand-run `.sql` script directly in `PatchlabTicketing.Api`, which violated this repo's ownership of shared-database schema and had no path to production — the table only ever existed on whichever machine someone ran the script against by hand, which is why the hard-delete feature shipped broken in production (`SqlException: Invalid object name 'DeletedTickets'`). It's now owned here instead, via the `AddDeletedTicketsTable` EF migration, same pattern as `ResolvedAt`'s `AddResolvedAtToTickets` — so it's created automatically by `db.Database.Migrate()` on deploy, no manual step required. The original `PatchlabTicketing.Api/Sql/001_create_deleted_tickets.sql` should be considered retired/superseded once this migration has been deployed. Its sibling scripts — `002_purge_deleted_tickets_proc.sql` (the nightly-purge stored procedure) and `003_purge_deleted_tickets_agent_job.sql` (the SQL Agent job that calls it) — have moved here too, as `Sql/002_purge_deleted_tickets_proc.sql` and `Sql/003_purge_deleted_tickets_agent_job.sql`, unchanged. They're retention tooling for `DeletedTickets`, not application schema, so they deliberately stay as plain `.sql` rather than becoming part of an EF migration — a stored procedure and a server-level SQL Agent job aren't things EF Core models, and a nightly purge job isn't something `db.Database.Migrate()` should be silently re-registering on every deploy. **Unlike the EF migration above, these two are not auto-applied by anything** — same manual-run caveat as `Sql/seed-local-dev.sql` (see "Local dev seed data"): run `002_purge_deleted_tickets_proc.sql` by hand against `Patchlab` to create/update the stored procedure, then `003_purge_deleted_tickets_agent_job.sql` by hand against `msdb` on the instance hosting it, once per environment.
 
 The SQL connection string lives in `config.json`, under the `SqlConnectionString` key (see Configuration below). Authentication is Windows integrated auth. The account the bot's service runs under needs an explicit SQL Server login. If the service runs as `LocalSystem`, that identity presents to SQL Server as `NT AUTHORITY\SYSTEM` for local connections, not the machine account name.
 
@@ -178,6 +195,25 @@ This project uses **EF Core migrations**, not hand-run `.sql` scripts, for schem
 5. Commit the migration files and push. The deploy pipeline applies pending migrations automatically (see below) — no manual `.sql` execution on any server, ever, going forward.
 
 **One-time gotcha, already handled, documented here for the next environment this gets deployed to:** any table that existed *before* EF Core was introduced (in this project's case, `Tickets`) will already exist on a target database the first time migrations run there. The very first migration (`InitialCreate`) must not try to `CREATE TABLE` anything that already exists — check its `Up()`/`Down()` bodies only contain genuinely new objects (new tables, new indexes) before that first migration ever runs against a pre-existing database. This only matters once per environment, on the very first migration run against it.
+
+## Local dev seed data
+
+> ⚠️ **`Sql/seed-local-dev.sql` is a manual, human-run-only tool. It WIPES and replaces every row in `TicketComments`, `TicketFeedback`, `Tickets`, and `Customers`. Never run it against a production database.** It is data-only (no `CREATE`/`ALTER TABLE`) and is deliberately **not** wired into `Program.cs`'s migrate-on-startup path — it only ever runs when a human deliberately invokes it, and it must never be wrapped in another script, task, pipeline, CI job, or any other automated invocation.
+>
+> **There is no automated safeguard in this script that can tell dev and production apart, and there cannot be one in this environment.** An earlier version tried to guard itself by checking `@@SERVERNAME`, but dev and production currently run on the same physical machine and report the identical server name — the check could not actually distinguish them, so it was removed rather than kept as security theatre that implied a safety this script doesn't have. **Safety here depends entirely on you personally checking which database you're connected to (`-S`/`-d`) before every single run — not on anything the script itself can verify.**
+
+After a fresh clone (or whenever you want a clean, predictable local dataset instead of whatever's accumulated from manual testing), `Sql/seed-local-dev.sql` gives you a fixed set of test tickets covering both happy-path and edge-case shapes — `Area = NULL`, `Closed` with `ResolvedAt = NULL` (a legacy pre-`ResolvedAt`-column ticket), tickets with no comments, tickets with no feedback, `Satisfied` feedback with a `NULL` reason, `Unhappy` feedback with a populated reason, a ticket with multiple ordered comments, and a ticket whose `CellphoneNumber` has no matching `Customers` row at all (so name lookups come back null/blank, the same shape `PatchlabTicketing`'s dashboard already has to handle). The goal is catching gaps like missing null-handling locally, before they surface against real data.
+
+It's idempotent — every run deletes all rows in FK-safe order (`TicketComments` → `TicketFeedback` → `Tickets` → `Customers`), reseeds identities back to 0, then re-inserts the same fixed dataset, so running it repeatedly never produces duplicates. Seeding is plain SQL `INSERT`s against the database — it never calls `IWhatsAppSender`, so running it never sends a real WhatsApp message to anyone, even though some of the seeded numbers are real.
+
+Before running it, confirm by hand which database you're actually connected to and cross-check that against wherever the live bot's `config.json` actually points — a server or database name that merely "sounds like" dev is not a real check:
+
+```powershell
+sqlcmd -S <server> -d <database> -E -C -Q "SELECT DB_NAME(), @@SERVERNAME"
+
+# Only after personally confirming that's your own local/dev instance, run the seed:
+sqlcmd -S localhost -d Patchlab -E -C -i Sql\seed-local-dev.sql
+```
 
 ## Configuration
 
