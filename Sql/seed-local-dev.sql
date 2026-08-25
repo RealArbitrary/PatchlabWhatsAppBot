@@ -135,16 +135,26 @@ FROM (VALUES
 JOIN Tickets t ON t.TicketNumber = f.TicketNumber;
 
 -- ---- TicketPhotos -----------------------------------------------------------
--- Placeholder paths only (nothing actually written to disk by this script) —
--- just enough rows for the eventual GUI-side work to have something to query.
--- Path shape matches TicketPhotoStorage's real layout: TicketPhotos/yyyy/MM/dd/<guid>.<ext>.
+-- These rows point at REAL files — run Sql\seed-ticket-photos-files.ps1
+-- separately (by hand, same as this script) to actually create them under
+-- TicketPhotos/<today>/<guid>.jpeg. Both scripts compute "today" (UTC)
+-- independently, so run them the same calendar day for the paths to line up.
+-- Covers three photo-count shapes for the GUI to exercise locally:
+--   TCKT-0001 -> 1 photo   (single-photo layout)
+--   TCKT-0008 -> 4 photos  (thumbnail strip scroll/wrap)
+--   everything else (e.g. TCKT-0002) -> 0 photos (the "No photos yet." empty state)
+-- GUIDs here must match Sql\seed-ticket-photos-files.ps1 exactly.
+DECLARE @photoDateFolder NVARCHAR(10) = FORMAT(SYSUTCDATETIME(), 'yyyy/MM/dd');
+
 INSERT INTO TicketPhotos (TicketId, FilePath, CreatedAt)
-SELECT t.Id, p.FilePath, p.CreatedAt
+SELECT t.Id, @photoDateFolder + N'/' + p.FileName, SYSUTCDATETIME()
 FROM (VALUES
-    (N'TCKT-0001', N'2026/08/18/11111111-1111-1111-1111-111111111111.jpeg', DATEADD(DAY, -9, SYSUTCDATETIME())),
-    (N'TCKT-0001', N'2026/08/18/22222222-2222-2222-2222-222222222222.jpeg', DATEADD(DAY, -9, SYSUTCDATETIME())),
-    (N'TCKT-0009', N'2026/08/21/33333333-3333-3333-3333-333333333333.jpeg', DATEADD(DAY, -4, SYSUTCDATETIME()))
-) AS p(TicketNumber, FilePath, CreatedAt)
+    (N'TCKT-0001', N'44444444-4444-4444-4444-444444444444.jpeg'),
+    (N'TCKT-0008', N'55555555-5555-5555-5555-555555555555.jpeg'),
+    (N'TCKT-0008', N'66666666-6666-6666-6666-666666666666.jpeg'),
+    (N'TCKT-0008', N'77777777-7777-7777-7777-777777777777.jpeg'),
+    (N'TCKT-0008', N'88888888-8888-8888-8888-888888888888.jpeg')
+) AS p(TicketNumber, FileName)
 JOIN Tickets t ON t.TicketNumber = p.TicketNumber;
 
 COMMIT TRANSACTION;
