@@ -79,28 +79,29 @@ INSERT INTO Customers (CellphoneNumber, FirstName, LastName, Area, CreatedAt, Up
 -- ---- Tickets -------------------------------------------------------------
 -- TicketNumber is a computed column (TCKT-000N from Id) — never insert it directly.
 -- Identity was reseeded to 0 above, so insert order below fixes TCKT-0001..0010.
-INSERT INTO Tickets (CellphoneNumber, Issue, Area, CreatedAt, Status, ResolvedAt) VALUES
+-- TicketType is an EF enum backed by a plain int column: 0 = IT, 1 = Herstelwerk.
+INSERT INTO Tickets (CellphoneNumber, Issue, Area, CreatedAt, Status, ResolvedAt, TicketType) VALUES
     -- TCKT-0001 — happy path: fully populated, closed, resolved, has comments + satisfied feedback
-    (N'27845979202', N'Projector bulb needs replacing in the Grade 2 classroom', N'Foundation Phase', DATEADD(DAY, -10, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -7, SYSUTCDATETIME())),
+    (N'27845979202', N'Projector bulb needs replacing in the Grade 2 classroom', N'Foundation Phase', DATEADD(DAY, -10, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -7, SYSUTCDATETIME()), 0 /* IT */),
     -- TCKT-0002 — happy path: fully populated, still open, no ResolvedAt yet.
     -- Ticket.Area deliberately differs from this customer's Customers.Area (Admin Block) to show the two are independent.
-    (N'27618755258', N'New printer needs network setup in the reception area', N'Reception', DATEADD(DAY, -2, SYSUTCDATETIME()), N'Open', NULL),
+    (N'27618755258', N'New printer needs network setup in the reception area', N'Reception', DATEADD(DAY, -2, SYSUTCDATETIME()), N'Open', NULL, 0 /* IT */),
     -- TCKT-0003 — edge case: Area = NULL (unassigned/unknown area)
-    (N'27820000001', N'Laptop won''t power on, no lights at all', NULL, DATEADD(DAY, -5, SYSUTCDATETIME()), N'Open', NULL),
+    (N'27820000001', N'Laptop won''t power on, no lights at all', NULL, DATEADD(DAY, -5, SYSUTCDATETIME()), N'Open', NULL, 0 /* IT */),
     -- TCKT-0004 — edge case: Closed but ResolvedAt = NULL (legacy pre-ResolvedAt-column ticket)
-    (N'27820000002', N'Smartboard calibration drifted, touch input misaligned', N'Grade 5', DATEADD(DAY, -30, SYSUTCDATETIME()), N'Closed', NULL),
+    (N'27820000002', N'Smartboard calibration drifted, touch input misaligned', N'Grade 5', DATEADD(DAY, -30, SYSUTCDATETIME()), N'Closed', NULL, 0 /* IT */),
     -- TCKT-0005 — edge case: no comments at all, no feedback at all, still open
-    (N'27820000003', N'Three lab PCs can''t connect to wifi', N'IT Lab', DATEADD(DAY, -3, SYSUTCDATETIME()), N'Open', NULL),
+    (N'27820000003', N'Three lab PCs can''t connect to wifi', N'IT Lab', DATEADD(DAY, -3, SYSUTCDATETIME()), N'Open', NULL, 0 /* IT */),
     -- TCKT-0006 — edge case: resolved but no feedback at all (customer never responded to the satisfaction prompt)
-    (N'27820000004', N'Landline phone has no dial tone', N'Front Office', DATEADD(DAY, -12, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -11, SYSUTCDATETIME())),
+    (N'27820000004', N'Landline phone has no dial tone', N'Front Office', DATEADD(DAY, -12, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -11, SYSUTCDATETIME()), 1 /* Herstelwerk */),
     -- TCKT-0007 — edge case: has feedback, Reason = NULL (satisfied, no comment given)
-    (N'27820000005', N'Scoreboard remote batteries need replacing', N'Sports Field', DATEADD(DAY, -6, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -5, SYSUTCDATETIME())),
+    (N'27820000005', N'Scoreboard remote batteries need replacing', N'Sports Field', DATEADD(DAY, -6, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -5, SYSUTCDATETIME()), 1 /* Herstelwerk */),
     -- TCKT-0008 — edge case: feedback Status = Unhappy with a populated Reason
-    (N'27820000006', N'Library catalogue system keeps logging users out', N'Library', DATEADD(DAY, -15, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -12, SYSUTCDATETIME())),
+    (N'27820000006', N'Library catalogue system keeps logging users out', N'Library', DATEADD(DAY, -15, SYSUTCDATETIME()), N'Closed', DATEADD(DAY, -12, SYSUTCDATETIME()), 0 /* IT */),
     -- TCKT-0009 — edge case: multiple comments, to exercise comment ordering/display
-    (N'27820000007', N'Classroom AC unit leaking water onto the floor', N'Grade 7', DATEADD(DAY, -4, SYSUTCDATETIME()), N'Open', NULL),
+    (N'27820000007', N'Classroom AC unit leaking water onto the floor', N'Grade 7', DATEADD(DAY, -4, SYSUTCDATETIME()), N'Open', NULL, 1 /* Herstelwerk */),
     -- TCKT-0010 — edge case: CellphoneNumber has no matching Customers row at all (name/customer fields come back null — GUI shows "—")
-    (N'27820000008', N'Front gate intercom not buzzing through to the office', N'Reception', DATEADD(DAY, -1, SYSUTCDATETIME()), N'Open', NULL);
+    (N'27820000008', N'Front gate intercom not buzzing through to the office', N'Reception', DATEADD(DAY, -1, SYSUTCDATETIME()), N'Open', NULL, 1 /* Herstelwerk */);
 
 -- ---- TicketComments --------------------------------------------------------
 INSERT INTO TicketComments (TicketId, Comment, CreatedAt)

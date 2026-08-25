@@ -4,6 +4,7 @@ public enum ConversationState
 {
     New,
     AwaitingStartChoice,
+    AwaitingTicketType,
     AwaitingReturningCustomerChoice,
     AwaitingName,
     AwaitingArea,

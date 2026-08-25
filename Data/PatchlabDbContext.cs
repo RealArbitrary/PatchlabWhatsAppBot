@@ -20,6 +20,12 @@ public class ErrorLog
     public DateTime CreatedAt { get; set; }
 }
 
+public enum TicketType
+{
+    IT,
+    Herstelwerk
+}
+
 public class Ticket
 {
     public int Id { get; set; }
@@ -30,6 +36,7 @@ public class Ticket
     public DateTime CreatedAt { get; set; }
     public string Status { get; set; } = "Open";
     public DateTime? ResolvedAt { get; set; }
+    public TicketType TicketType { get; set; }
 }
 
 public class Customer
