@@ -33,6 +33,21 @@ public class WhatsAppWebhookController : ControllerBase
     // question, which leads to confusing dead ends.
     private static readonly string[] ResetKeywords = { "hi", "hello", "menu", "cancel", "start", "restart" };
 
+    // Every message type WhatsApp's Cloud API delivers media under. Any of
+    // these arriving while AwaitingPhotos gets validated before anything is
+    // downloaded — everything else (text, interactive replies, etc.) is left
+    // to the normal dispatch below, unchanged.
+    private static readonly HashSet<string> MediaMessageTypes = new() { "image", "video", "audio", "document", "sticker" };
+
+    // The only mime types Meta's Cloud API actually reports for a "photo"
+    // sent from WhatsApp's own picker/camera: image/jpeg and image/png.
+    // image/webp is included too since it's what stickers use and is a
+    // harmless, genuinely-an-image format if it ever shows up here.
+    private static readonly HashSet<string> ValidImageMimeTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/jpeg", "image/png", "image/webp"
+    };
+
     public WhatsAppWebhookController(
      ConversationStore store,
      IWhatsAppSender sender,
@@ -92,13 +107,13 @@ public class WhatsAppWebhookController : ControllerBase
         var session = _store.GetOrCreate(from);
         session.CellphoneNumber = from;
 
-        // Incoming photos are only meaningful while we're actively waiting
-        // for them, and don't fit the button/list/text shape ExtractInput
-        // understands — handle them separately and skip the normal dispatch
-        // entirely for this message.
-        if (messageType == "image" && session.State == ConversationState.AwaitingPhotos)
+        // Incoming media is only meaningful while we're actively waiting for
+        // photos, and doesn't fit the button/list/text shape ExtractInput
+        // understands — handle it separately (accept-if-image / reject
+        // otherwise) and skip the normal dispatch entirely for this message.
+        if (session.State == ConversationState.AwaitingPhotos && MediaMessageTypes.Contains(messageType ?? ""))
         {
-            await HandleIncomingPhotoAsync(session, message);
+            await HandleIncomingMediaAsync(session, message, messageType!);
             return Ok();
         }
 
@@ -411,6 +426,46 @@ public class WhatsAppWebhookController : ControllerBase
                 await SendPhotoChoiceAsync(session);
                 break;
         }
+    }
+
+    private async Task HandleIncomingMediaAsync(ConversationSession session, JsonElement message, string messageType)
+    {
+        if (!IsAcceptedImage(message, messageType, out var mimeType))
+        {
+            _logger.LogInformation(
+                "Rejected non-image media ({MessageType}/{MimeType}) from {PhoneNumber} while awaiting photos",
+                messageType, mimeType ?? "unknown", session.CellphoneNumber);
+
+            await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                "Only photos are accepted — please send an image, or wait and we'll continue without one.");
+
+            // Deliberately stop here: no download, no save, no TicketPhotos
+            // row, and — critically — neither timer is touched, so this is a
+            // complete no-op from PhotoWaitCoordinator's point of view.
+            // Whichever timer was already running (initial wait or debounce)
+            // just keeps counting down exactly as if nothing had arrived.
+            return;
+        }
+
+        await HandleIncomingPhotoAsync(session, message);
+    }
+
+    private static bool IsAcceptedImage(JsonElement message, string messageType, out string? mimeType)
+    {
+        mimeType = null;
+        if (messageType != "image") return false;
+        if (!message.GetProperty("image").TryGetProperty("mime_type", out var mt)) return false;
+
+        mimeType = mt.GetString();
+        if (mimeType is null) return false;
+
+        // Strip any "; codecs=..."-style suffix before comparing — images
+        // shouldn't carry one, but this mirrors the same defensive parsing
+        // TicketPhotoStorage does when deriving a file extension.
+        var semicolon = mimeType.IndexOf(';');
+        var normalized = (semicolon >= 0 ? mimeType[..semicolon] : mimeType).Trim();
+
+        return ValidImageMimeTypes.Contains(normalized);
     }
 
     private async Task HandleIncomingPhotoAsync(ConversationSession session, JsonElement message)
