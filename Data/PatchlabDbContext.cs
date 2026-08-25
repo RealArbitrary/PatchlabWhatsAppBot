@@ -52,6 +52,26 @@ public class TicketFeedback
     public DateTime CreatedAt { get; set; }
 }
 
+// Archive row for a hard-deleted ticket. Standalone — no FK back to
+// Tickets/TicketComments/TicketFeedback, since those live rows are gone by
+// the time a row lands here. TicketId preserves the original Tickets.Id for
+// reference only, it is not an identity/FK here.
+public class DeletedTicket
+{
+    public int ArchiveId { get; set; }
+    public int TicketId { get; set; }
+    public string? TicketNumber { get; set; }
+    public string CellphoneNumber { get; set; } = "";
+    public string Issue { get; set; } = "";
+    public string? Area { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ResolvedAt { get; set; }
+    public string Status { get; set; } = "";
+    public string? CommentsJson { get; set; }
+    public string? FeedbackJson { get; set; }
+    public DateTime DeletedAt { get; set; }
+}
+
 public class PatchlabDbContext : DbContext
 {
     public PatchlabDbContext(DbContextOptions<PatchlabDbContext> options) : base(options) { }
@@ -61,6 +81,7 @@ public class PatchlabDbContext : DbContext
     public DbSet<TicketFeedback> TicketFeedback => Set<TicketFeedback>();
     public DbSet<ErrorLog> ErrorLogs => Set<ErrorLog>();
     public DbSet<TicketComment> TicketComments => Set<TicketComment>();
+    public DbSet<DeletedTicket> DeletedTickets => Set<DeletedTicket>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -78,6 +99,21 @@ public class PatchlabDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
 
             e.HasIndex(c => c.TicketId).HasDatabaseName("IX_TicketComments_TicketId");
+        });
+
+        modelBuilder.Entity<DeletedTicket>(e =>
+        {
+            e.ToTable("DeletedTickets");
+            e.HasKey(d => d.ArchiveId);
+
+            e.Property(d => d.TicketNumber).HasColumnType("varchar(9)");
+            e.Property(d => d.CellphoneNumber).HasMaxLength(40).IsRequired();
+            e.Property(d => d.Issue).IsRequired();
+            e.Property(d => d.Area).HasMaxLength(400);
+            e.Property(d => d.Status).HasMaxLength(40).IsRequired();
+            e.Property(d => d.DeletedAt).HasDefaultValueSql("GETUTCDATE()");
+
+            e.HasIndex(d => d.DeletedAt).HasDatabaseName("IX_DeletedTickets_DeletedAt");
         });
 
         modelBuilder.Entity<ErrorLog>(e =>
