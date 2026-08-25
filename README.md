@@ -248,6 +248,14 @@ sqlcmd -S <server> -d <database> -E -C -Q "SELECT DB_NAME(), @@SERVERNAME"
 sqlcmd -S localhost -d Patchlab -E -C -i Sql\seed-local-dev.sql
 ```
 
+**Ticket photos**: `Sql\seed-local-dev.sql`'s `TicketPhotos` rows point at real files, not just placeholder paths — TCKT-0001 gets 1 photo, TCKT-0008 gets 4 (to exercise the thumbnail strip's scroll/wrap), everything else stays at 0 (the "No photos yet." empty state). The actual JPEGs are generated separately by `Sql\seed-ticket-photos-files.ps1`, which only ever writes under `TicketPhotos\` in this repo — it never touches the database, never calls `sqlcmd`, and carries the same "run by hand, never wrap this in anything automated" rule as its companion:
+
+```powershell
+powershell -File Sql\seed-ticket-photos-files.ps1
+```
+
+Run both, in either order, on the same UTC calendar day — each computes "today" independently (`SYSUTCDATETIME()` in the `.sql`, `DateTime.UtcNow` in the `.ps1`) to build the `TicketPhotos/yyyy/MM/dd/` folder the rows point at, and the fixed GUIDs in each file have to match the other's for the paths to actually resolve. `PatchlabTicketing.Api`'s static file route serves this same folder at `/photos/<FilePath>` (see its own `TicketPhotosRootPath` config) — verified locally by starting that API and loading `https://localhost:7168/photos/<date>/<guid>.jpeg` directly in a browser.
+
 ## Configuration
 
 This project reads configuration from `config.json` via `WhatsAppBotConfig.SharedConfig.Load()`, not `dotnet user-secrets`. `config-example.json` documents the required shape:
