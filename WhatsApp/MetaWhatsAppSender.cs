@@ -135,6 +135,36 @@ public class MetaWhatsAppSender : IWhatsAppSender
         await PostAsync(payload);
     }
 
+    public async Task<WhatsAppMedia> DownloadMediaAsync(string mediaId)
+    {
+        // Step 1: resolve the media ID to a short-lived CDN URL + mime type.
+        var lookupUrl = $"https://graph.facebook.com/v21.0/{mediaId}";
+        var lookupRequest = new HttpRequestMessage(HttpMethod.Get, lookupUrl);
+        lookupRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.AccessToken);
+
+        var lookupResponse = await _httpClient.SendAsync(lookupRequest);
+        lookupResponse.EnsureSuccessStatusCode();
+
+        using var lookupJson = JsonDocument.Parse(await lookupResponse.Content.ReadAsStreamAsync());
+        var mediaUrl = lookupJson.RootElement.GetProperty("url").GetString()
+            ?? throw new InvalidOperationException($"Media lookup for {mediaId} returned no url.");
+        var mimeType = lookupJson.RootElement.TryGetProperty("mime_type", out var mt)
+            ? mt.GetString() ?? "application/octet-stream"
+            : "application/octet-stream";
+
+        // Step 2: the CDN URL itself also requires the same bearer token —
+        // it is not a public link, and it expires, so this must happen
+        // immediately rather than storing the URL for later.
+        var downloadRequest = new HttpRequestMessage(HttpMethod.Get, mediaUrl);
+        downloadRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.AccessToken);
+
+        var downloadResponse = await _httpClient.SendAsync(downloadRequest);
+        downloadResponse.EnsureSuccessStatusCode();
+
+        var content = await downloadResponse.Content.ReadAsByteArrayAsync();
+        return new WhatsAppMedia(content, mimeType);
+    }
+
     private static string Truncate(string value, int maxLength)
         => value.Length <= maxLength ? value : value[..maxLength];
 }

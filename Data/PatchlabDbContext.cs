@@ -49,6 +49,17 @@ public class Customer
     public DateTime UpdatedAt { get; set; }
 }
 
+// One row per photo attached to a ticket via the WhatsApp flow. Photo bytes
+// live on the filesystem, not in the database — FilePath is relative to the
+// app's photo storage root (see Storage/TicketPhotoStorage.cs), never absolute.
+public class TicketPhoto
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public string FilePath { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
 public class TicketFeedback
 {
     public int Id { get; set; }
@@ -89,6 +100,7 @@ public class PatchlabDbContext : DbContext
     public DbSet<ErrorLog> ErrorLogs => Set<ErrorLog>();
     public DbSet<TicketComment> TicketComments => Set<TicketComment>();
     public DbSet<DeletedTicket> DeletedTickets => Set<DeletedTicket>();
+    public DbSet<TicketPhoto> TicketPhotos => Set<TicketPhoto>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -106,6 +118,22 @@ public class PatchlabDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
 
             e.HasIndex(c => c.TicketId).HasDatabaseName("IX_TicketComments_TicketId");
+        });
+
+        modelBuilder.Entity<TicketPhoto>(e =>
+        {
+            e.ToTable("TicketPhotos");
+            e.HasKey(p => p.Id);
+
+            e.Property(p => p.FilePath).HasMaxLength(400).IsRequired();
+            e.Property(p => p.CreatedAt).HasDefaultValueSql("sysutcdatetime()");
+
+            e.HasOne<Ticket>()
+                .WithMany()
+                .HasForeignKey(p => p.TicketId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasIndex(p => p.TicketId).HasDatabaseName("IX_TicketPhotos_TicketId");
         });
 
         modelBuilder.Entity<DeletedTicket>(e =>

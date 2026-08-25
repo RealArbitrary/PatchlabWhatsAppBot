@@ -4,6 +4,7 @@ using PatchlabWhatsAppBot.Customers;
 using PatchlabWhatsAppBot.Data;
 using PatchlabWhatsAppBot.Logging;
 using PatchlabWhatsAppBot.Staff;
+using PatchlabWhatsAppBot.Storage;
 using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
 
@@ -33,6 +34,12 @@ builder.Services.AddDbContext<PatchlabDbContext>(options =>
 builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<ICustomerRepository, CustomerRepository>();
 builder.Services.AddScoped<IStaffNotifier, WhatsAppStaffNotifier>();
+builder.Services.AddSingleton<ITicketPhotoStorage, TicketPhotoStorage>();
+builder.Services.AddScoped<PendingTicketFinalizer>();
+
+// Singleton: owns real wall-clock timers per phone number that must keep
+// running independent of any inbound HTTP request (see PhotoWaitCoordinator).
+builder.Services.AddSingleton<PhotoWaitCoordinator>();
 
 var app = builder.Build();
 

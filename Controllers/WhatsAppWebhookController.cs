@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using PatchlabWhatsAppBot.Conversations;
 using PatchlabWhatsAppBot.Customers;
 using PatchlabWhatsAppBot.Data;
+using PatchlabWhatsAppBot.Storage;
 using PatchlabWhatsAppBot.Tickets;
 using PatchlabWhatsAppBot.WhatsApp;
 using System.Text.Json;
@@ -21,6 +22,9 @@ public class WhatsAppWebhookController : ControllerBase
     private readonly ICustomerRepository _customers;
     private readonly IStaffNotifier _staffNotifier;
     private readonly ILogger<WhatsAppWebhookController> _logger;
+    private readonly ITicketPhotoStorage _photoStorage;
+    private readonly PhotoWaitCoordinator _photoWaitCoordinator;
+    private readonly PendingTicketFinalizer _finalizer;
 
     // Any of these, typed in any state, cancels whatever flow the user is
     // mid-way through and starts over from the beginning. Without this,
@@ -29,6 +33,21 @@ public class WhatsAppWebhookController : ControllerBase
     // question, which leads to confusing dead ends.
     private static readonly string[] ResetKeywords = { "hi", "hello", "menu", "cancel", "start", "restart" };
 
+    // Every message type WhatsApp's Cloud API delivers media under. Any of
+    // these arriving while AwaitingPhotos gets validated before anything is
+    // downloaded — everything else (text, interactive replies, etc.) is left
+    // to the normal dispatch below, unchanged.
+    private static readonly HashSet<string> MediaMessageTypes = new() { "image", "video", "audio", "document", "sticker" };
+
+    // The only mime types Meta's Cloud API actually reports for a "photo"
+    // sent from WhatsApp's own picker/camera: image/jpeg and image/png.
+    // image/webp is included too since it's what stickers use and is a
+    // harmless, genuinely-an-image format if it ever shows up here.
+    private static readonly HashSet<string> ValidImageMimeTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/jpeg", "image/png", "image/webp"
+    };
+
     public WhatsAppWebhookController(
      ConversationStore store,
      IWhatsAppSender sender,
@@ -36,7 +55,10 @@ public class WhatsAppWebhookController : ControllerBase
      ITicketRepository tickets,
      ICustomerRepository customers,
      IStaffNotifier staffNotifier,
-     ILogger<WhatsAppWebhookController> logger)
+     ILogger<WhatsAppWebhookController> logger,
+     ITicketPhotoStorage photoStorage,
+     PhotoWaitCoordinator photoWaitCoordinator,
+     PendingTicketFinalizer finalizer)
     {
         _store = store;
         _sender = sender;
@@ -45,6 +67,9 @@ public class WhatsAppWebhookController : ControllerBase
         _customers = customers;
         _staffNotifier = staffNotifier;
         _logger = logger;
+        _photoStorage = photoStorage;
+        _photoWaitCoordinator = photoWaitCoordinator;
+        _finalizer = finalizer;
     }
 
     [HttpGet]
@@ -77,22 +102,38 @@ public class WhatsAppWebhookController : ControllerBase
 
         var message = messages.Value[0];
         var from = message.GetProperty("from").GetString()!;
+        var messageType = message.GetProperty("type").GetString();
+
+        var session = _store.GetOrCreate(from);
+        session.CellphoneNumber = from;
+
+        // Incoming media is only meaningful while we're actively waiting for
+        // photos, and doesn't fit the button/list/text shape ExtractInput
+        // understands — handle it separately (accept-if-image / reject
+        // otherwise) and skip the normal dispatch entirely for this message.
+        if (session.State == ConversationState.AwaitingPhotos && MediaMessageTypes.Contains(messageType ?? ""))
+        {
+            await HandleIncomingMediaAsync(session, message, messageType!);
+            return Ok();
+        }
 
         // WhatsApp sends button/list replies as a different shape to free text.
         // Pull out whichever ID/text is present so the state machine below
         // can branch on button taps the same way it branches on typed text.
         var input = ExtractInput(message);
 
-        var session = _store.GetOrCreate(from);
-        session.CellphoneNumber = from;
-
         // Global reset: regardless of what state the conversation is in,
         // a reset keyword bails out to the very start. Only applies to
         // free-typed text — button/list taps carry their own ids (e.g.
         // "use_saved") and should never accidentally match a keyword.
-        if (message.GetProperty("type").GetString() == "text"
+        if (messageType == "text"
     && ResetKeywords.Contains(input.Trim().ToLowerInvariant()))
         {
+            // A reset can interrupt an active photo wait — cancel whichever
+            // timer is running for this number so it doesn't fire later
+            // against a session that's already moved on.
+            _photoWaitCoordinator.Cancel(session.CellphoneNumber);
+
             _store.Reset(session.CellphoneNumber);
             session = _store.GetOrCreate(from); // re-fetch: Reset() removed the old
                                                 // session entirely, so the object
@@ -157,6 +198,17 @@ public class WhatsAppWebhookController : ControllerBase
 
             case ConversationState.AwaitingIssue:
                 await HandleIssueAsync(session, input);
+                break;
+
+            case ConversationState.AwaitingPhotoChoice:
+                await HandlePhotoChoiceAsync(session, input);
+                break;
+
+            case ConversationState.AwaitingPhotos:
+                // Non-image input while we're waiting on photos (stray text,
+                // an accidental tap, anything). There's no action to take —
+                // completion here is governed entirely by PhotoWaitCoordinator's
+                // two timers, not by what the user types. Just keep waiting.
                 break;
 
             case ConversationState.AwaitingTicketSelection:
@@ -335,40 +387,115 @@ public class WhatsAppWebhookController : ControllerBase
     private async Task HandleIssueAsync(ConversationSession session, string input)
     {
         session.IssueText = input.Trim();
+        await SendPhotoChoiceAsync(session);
+    }
 
-        var ticket = await _tickets.CreateTicketAsync(
-            session.CellphoneNumber,
-            session.IssueText,
-            session.FirstName ?? "",
-            session.LastName ?? "",
-            session.Area ?? "",
-            session.TicketType!.Value); // required and set by HandleTicketTypeChoiceAsync before this state is reachable
+    // ---- Optional photo attachment (after Issue, before ticket creation) ----
 
-        // Keep the Customers table current whether they typed fresh
-        // details, confirmed saved ones, or updated them — this is what
-        // makes the *next* "log a ticket" skip name/surname too.
-        await _customers.UpsertAsync(
+    private async Task SendPhotoChoiceAsync(ConversationSession session)
+    {
+        session.State = ConversationState.AwaitingPhotoChoice;
+        await _sender.SendButtonsAsync(
             session.CellphoneNumber,
-            session.FirstName ?? "",
-            session.LastName ?? "",
-            session.Area);
+            "Would you like to attach any photos?",
+            new[]
+            {
+                new WhatsAppButton("attach_photos_yes", "Yes"),
+                new WhatsAppButton("attach_photos_no", "No, continue")
+            });
+    }
+
+    private async Task HandlePhotoChoiceAsync(ConversationSession session, string input)
+    {
+        switch (input)
+        {
+            case "attach_photos_yes":
+                session.State = ConversationState.AwaitingPhotos;
+                await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                    "Please send your photo(s) now. I'll wait a little while in case you send more than one.");
+                _photoWaitCoordinator.StartInitialWait(session.CellphoneNumber);
+                break;
+
+            case "attach_photos_no":
+                await _finalizer.CreateTicketAndFinishAsync(session);
+                break;
+
+            default:
+                // Required choice, no free-text fallthrough — anything
+                // unrecognised re-asks instead of silently picking a side.
+                await SendPhotoChoiceAsync(session);
+                break;
+        }
+    }
+
+    private async Task HandleIncomingMediaAsync(ConversationSession session, JsonElement message, string messageType)
+    {
+        if (!IsAcceptedImage(message, messageType, out var mimeType))
+        {
+            _logger.LogInformation(
+                "Rejected non-image media ({MessageType}/{MimeType}) from {PhoneNumber} while awaiting photos",
+                messageType, mimeType ?? "unknown", session.CellphoneNumber);
+
+            await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                "Only photos are accepted — please send an image, or wait and we'll continue without one.");
+
+            // Deliberately stop here: no download, no save, no TicketPhotos
+            // row, and — critically — neither timer is touched, so this is a
+            // complete no-op from PhotoWaitCoordinator's point of view.
+            // Whichever timer was already running (initial wait or debounce)
+            // just keeps counting down exactly as if nothing had arrived.
+            return;
+        }
+
+        await HandleIncomingPhotoAsync(session, message);
+    }
+
+    private static bool IsAcceptedImage(JsonElement message, string messageType, out string? mimeType)
+    {
+        mimeType = null;
+        if (messageType != "image") return false;
+        if (!message.GetProperty("image").TryGetProperty("mime_type", out var mt)) return false;
+
+        mimeType = mt.GetString();
+        if (mimeType is null) return false;
+
+        // Strip any "; codecs=..."-style suffix before comparing — images
+        // shouldn't carry one, but this mirrors the same defensive parsing
+        // TicketPhotoStorage does when deriving a file extension.
+        var semicolon = mimeType.IndexOf(';');
+        var normalized = (semicolon >= 0 ? mimeType[..semicolon] : mimeType).Trim();
+
+        return ValidImageMimeTypes.Contains(normalized);
+    }
+
+    private async Task HandleIncomingPhotoAsync(ConversationSession session, JsonElement message)
+    {
+        var mediaId = message.GetProperty("image").GetProperty("id").GetString();
+        if (string.IsNullOrEmpty(mediaId))
+        {
+            return; // malformed payload — nothing to download, don't touch the timers
+        }
 
         try
         {
-            await _staffNotifier.NotifyNewTicketAsync(ticket.TicketNumber, session.IssueText);
+            var media = await _sender.DownloadMediaAsync(mediaId);
+            var relativePath = await _photoStorage.SavePhotoAsync(media.Content, media.MimeType);
+            session.PendingPhotoPaths.Add(relativePath);
         }
         catch (Exception ex)
         {
-            // Staff notification failing must never block the customer's own
-            // confirmation below — the ticket is already saved regardless.
-            _logger.LogError(ex, "Failed to notify staff of new ticket {TicketNumber}", ticket.TicketNumber);
+            // A failed download shouldn't derail the whole ticket — log it
+            // and leave whichever timer was already running alone, so a
+            // teacher whose photo silently failed to download still isn't
+            // stuck forever; the wait just continues/expires as normal.
+            _logger.LogError(ex, "Failed to download/save incoming photo {MediaId} for {PhoneNumber}", mediaId, session.CellphoneNumber);
+            return;
         }
 
-        await _sender.SendTextMessageAsync(session.CellphoneNumber,
-    $"Thank you for your time, your ticket {ticket.TicketNumber} has been logged. " +
-    "To view your tickets please message me again.");
-
-        _store.Reset(session.CellphoneNumber);
+        // First photo (or any subsequent one) always (re)starts the same
+        // 10s debounce — this is what makes the initial-wait timer
+        // irrelevant from here on: it just gets replaced.
+        _photoWaitCoordinator.ResetDebounce(session.CellphoneNumber);
     }
 
     // ---- Check on existing ticket ---------------------------------------

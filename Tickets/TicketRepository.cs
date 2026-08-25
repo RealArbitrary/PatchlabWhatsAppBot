@@ -9,6 +9,7 @@ public interface ITicketRepository
     Task<List<Ticket>> GetTicketsByCellphoneAsync(string cellphoneNumber);
     Task<string?> GetLatestStatusCommentAsync(string ticketNumber);
     Task AddFeedbackAsync(string ticketNumber, string status, string? reason);
+    Task AddPhotosAsync(int ticketId, IReadOnlyList<string> filePaths);
 }
 
 public class TicketRepository : ITicketRepository
@@ -72,6 +73,19 @@ public class TicketRepository : ITicketRepository
             Status = status,
             Reason = reason
         });
+
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task AddPhotosAsync(int ticketId, IReadOnlyList<string> filePaths)
+    {
+        if (filePaths.Count == 0) return;
+
+        _db.TicketPhotos.AddRange(filePaths.Select(path => new TicketPhoto
+        {
+            TicketId = ticketId,
+            FilePath = path
+        }));
 
         await _db.SaveChangesAsync();
     }
