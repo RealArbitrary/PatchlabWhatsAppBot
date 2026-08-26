@@ -247,32 +247,45 @@ public class WhatsAppWebhookController : ControllerBase
 
     private async Task HandleStartChoiceAsync(ConversationSession session, string input)
     {
-        if (input == "check_existing")
+        switch (input)
         {
-            var openTickets = await _tickets.GetTicketsByCellphoneAsync(session.CellphoneNumber);
+            case "check_existing":
+                await SendTicketSelectionListAsync(session);
+                return;
 
-            if (openTickets.Count == 0)
-            {
-                await _sender.SendTextMessageAsync(session.CellphoneNumber,
-                    "You don't have any tickets logged yet. Let's log one.");
+            case "log_ticket":
                 await SendTicketTypeChoiceAsync(session);
                 return;
-            }
 
-            session.State = ConversationState.AwaitingTicketSelection;
-            await _sender.SendListAsync(
-                session.CellphoneNumber,
-                "Here are your tickets, please select one to see status:",
-                "View tickets",
-                    openTickets.Select(t => new WhatsAppListRow(
-                    t.TicketNumber,
-                    t.TicketNumber,
-                    $"{t.Status} - {t.Issue}")).ToList());
+            default:
+                // Required choice, no free-text fallthrough — anything
+                // unrecognised re-asks instead of silently picking a side.
+                await SendStartChoiceAsync(session);
+                return;
+        }
+    }
+
+    private async Task SendTicketSelectionListAsync(ConversationSession session)
+    {
+        var openTickets = await _tickets.GetTicketsByCellphoneAsync(session.CellphoneNumber);
+
+        if (openTickets.Count == 0)
+        {
+            await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                "You don't have any tickets logged yet. Let's log one.");
+            await SendTicketTypeChoiceAsync(session);
             return;
         }
 
-        // Default / "log_ticket"
-        await SendTicketTypeChoiceAsync(session);
+        session.State = ConversationState.AwaitingTicketSelection;
+        await _sender.SendListAsync(
+            session.CellphoneNumber,
+            "Here are your tickets, please select one to see status:",
+            "View tickets",
+                openTickets.Select(t => new WhatsAppListRow(
+                t.TicketNumber,
+                t.TicketNumber,
+                $"{t.Status} - {t.Issue}")).ToList());
     }
 
     // ---- Log a ticket (ticket type is required before anything else, then
@@ -329,10 +342,15 @@ public class WhatsAppWebhookController : ControllerBase
         session.Area = existingCustomer.Area;
         session.DetailsFromSavedProfile = true;
 
+        await SendReturningCustomerChoiceAsync(session);
+    }
+
+    private async Task SendReturningCustomerChoiceAsync(ConversationSession session)
+    {
         session.State = ConversationState.AwaitingReturningCustomerChoice;
         await _sender.SendButtonsAsync(
             session.CellphoneNumber,
-            $"Welcome back, {existingCustomer.FirstName} {existingCustomer.LastName}. " +
+            $"Welcome back, {session.FirstName} {session.LastName}. " +
             "Shall we use your saved details for this ticket, or would you like to update them first?",
             new[]
             {
@@ -343,30 +361,46 @@ public class WhatsAppWebhookController : ControllerBase
 
     private async Task HandleReturningCustomerChoiceAsync(ConversationSession session, string input)
     {
-        if (input == "update_details")
+        switch (input)
         {
-            session.DetailsFromSavedProfile = false;
-            session.State = ConversationState.AwaitingName;
-            await _sender.SendTextMessageAsync(session.CellphoneNumber,
-                "No problem — please provide the following information:\nTeacher name and surname.");
-            return;
-        }
+            case "update_details":
+                session.DetailsFromSavedProfile = false;
+                session.State = ConversationState.AwaitingName;
+                await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                    "No problem — please provide the following information:\nTeacher name and surname.");
+                return;
 
-        // "use_saved" (or anything else — default to the happy path)
-        // Name/surname come from the saved profile already. Area can still
-        // change ticket to ticket (a different classroom, etc.), so we
-        // still confirm it, pre-filled as a reminder.
-        session.State = ConversationState.AwaitingArea;
-        var areaHint = string.IsNullOrWhiteSpace(session.Area)
-            ? ""
-            : $" (last time: \"{session.Area}\")";
-        await _sender.SendTextMessageAsync(session.CellphoneNumber,
-            $"Please provide the area where your problem is{areaHint}.");
+            case "use_saved":
+                // Name/surname come from the saved profile already. Area can
+                // still change ticket to ticket (a different classroom,
+                // etc.), so we still confirm it, pre-filled as a reminder.
+                session.State = ConversationState.AwaitingArea;
+                var areaHint = string.IsNullOrWhiteSpace(session.Area)
+                    ? ""
+                    : $" (last time: \"{session.Area}\")";
+                await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                    $"Please provide the area where your problem is{areaHint}.");
+                return;
+
+            default:
+                // Required choice, no free-text fallthrough — anything
+                // unrecognised re-asks instead of silently picking a side.
+                await SendReturningCustomerChoiceAsync(session);
+                return;
+        }
     }
 
     private async Task HandleNameAsync(ConversationSession session, string input)
     {
-        var parts = input.Trim().Split(' ', 2);
+        var trimmed = input.Trim();
+        if (trimmed.Length < 2)
+        {
+            await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                "That doesn't look like a complete answer — could you try again? Please provide your name and surname.");
+            return;
+        }
+
+        var parts = trimmed.Split(' ', 2);
         session.FirstName = parts[0];
         session.LastName = parts.Length > 1 ? parts[1] : "";
 
@@ -377,7 +411,15 @@ public class WhatsAppWebhookController : ControllerBase
 
     private async Task HandleAreaAsync(ConversationSession session, string input)
     {
-        session.Area = input.Trim();
+        var trimmed = input.Trim();
+        if (trimmed.Length < 2)
+        {
+            await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                "That doesn't look like a complete answer — could you try again? Please provide the area where your problem is.");
+            return;
+        }
+
+        session.Area = trimmed;
 
         session.State = ConversationState.AwaitingIssue;
         await _sender.SendTextMessageAsync(session.CellphoneNumber,
@@ -386,7 +428,15 @@ public class WhatsAppWebhookController : ControllerBase
 
     private async Task HandleIssueAsync(ConversationSession session, string input)
     {
-        session.IssueText = input.Trim();
+        var trimmed = input.Trim();
+        if (trimmed.Length < 5)
+        {
+            await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                "That doesn't look like a complete answer — could you try again? Please describe the problem in a bit more detail.");
+            return;
+        }
+
+        session.IssueText = trimmed;
         await SendPhotoChoiceAsync(session);
     }
 
@@ -502,13 +552,31 @@ public class WhatsAppWebhookController : ControllerBase
 
     private async Task HandleTicketSelectionAsync(ConversationSession session, string input)
     {
+        // GetLatestStatusCommentAsync returns null only when no ticket with
+        // this number exists at all (see TicketRepository) — that's the
+        // signal a garbage/stale id was sent, not "a valid ticket with
+        // nothing to report" (a valid ticket always has a Status). Treat it
+        // as an invalid selection and re-send the list rather than
+        // advancing on an id that was never actually presented.
         var status = await _tickets.GetLatestStatusCommentAsync(input);
+        if (status is null)
+        {
+            await SendTicketSelectionListAsync(session);
+            return;
+        }
+
         session.SelectedTicketNumber = input;
+        await SendTicketFeedbackChoiceAsync(session, status);
+    }
+
+    private async Task SendTicketFeedbackChoiceAsync(ConversationSession session, string? statusText = null)
+    {
+        statusText ??= await _tickets.GetLatestStatusCommentAsync(session.SelectedTicketNumber ?? "");
 
         session.State = ConversationState.AwaitingTicketFeedback;
         await _sender.SendButtonsAsync(
             session.CellphoneNumber,
-            status ?? "No updates on this ticket yet.",
+            statusText ?? "No updates on this ticket yet.",
             new[]
             {
                 new WhatsAppButton("satisfied", "Happy with result"),
@@ -523,32 +591,46 @@ public class WhatsAppWebhookController : ControllerBase
         {
             case "log_another":
                 await SendTicketTypeChoiceAsync(session);
-                break;
+                return;
 
             case "unhappy":
                 session.State = ConversationState.AwaitingUnhappyReason;
                 await _sender.SendTextMessageAsync(session.CellphoneNumber,
                     "Can you kindly tell us why you are unhappy with the ticket?");
-                break;
+                return;
 
-            default: // "satisfied" or anything else
+            case "satisfied":
                 await _tickets.AddFeedbackAsync(session.SelectedTicketNumber ?? "unknown", "Satisfied", null);
                 await _sender.SendTextMessageAsync(session.CellphoneNumber, "Thank you and have a nice day.");
                 _store.Reset(session.CellphoneNumber);
-                break;
+                return;
+
+            default:
+                // Required choice, no free-text fallthrough — anything
+                // unrecognised re-asks instead of silently picking a side.
+                await SendTicketFeedbackChoiceAsync(session);
+                return;
         }
     }
 
     private async Task HandleUnhappyReasonAsync(ConversationSession session, string input)
     {
-        await _tickets.AddFeedbackAsync(session.SelectedTicketNumber ?? "unknown", "Unhappy", input);
+        var trimmed = input.Trim();
+        if (trimmed.Length < 5)
+        {
+            await _sender.SendTextMessageAsync(session.CellphoneNumber,
+                "That doesn't look like a complete answer — could you try again? Please tell us a bit more about why you're unhappy.");
+            return;
+        }
+
+        await _tickets.AddFeedbackAsync(session.SelectedTicketNumber ?? "unknown", "Unhappy", trimmed);
 
         try
         {
             await _staffNotifier.NotifyUnhappyTicketAsync(
                 session.SelectedTicketNumber ?? "unknown",
                 session.CellphoneNumber,
-                input);
+                trimmed);
         }
         catch (Exception ex)
         {
