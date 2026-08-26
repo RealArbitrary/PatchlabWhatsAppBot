@@ -98,7 +98,7 @@ public class MetaWhatsAppSender : IWhatsAppSender
 
     private async Task PostAsync(object payload)
     {
-        var url = $"https://graph.facebook.com/v21.0/{_options.PhoneNumberId}/messages";
+        var url = $"https://graph.facebook.com/v26.0/{_options.PhoneNumberId}/messages";
 
         var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
@@ -138,7 +138,7 @@ public class MetaWhatsAppSender : IWhatsAppSender
     public async Task<WhatsAppMedia> DownloadMediaAsync(string mediaId)
     {
         // Step 1: resolve the media ID to a short-lived CDN URL + mime type.
-        var lookupUrl = $"https://graph.facebook.com/v21.0/{mediaId}";
+        var lookupUrl = $"https://graph.facebook.com/v26.0/{mediaId}";
         var lookupRequest = new HttpRequestMessage(HttpMethod.Get, lookupUrl);
         lookupRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.AccessToken);
 
