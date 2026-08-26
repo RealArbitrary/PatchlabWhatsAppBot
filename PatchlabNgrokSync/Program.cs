@@ -40,7 +40,7 @@ var callbackUri = $"{httpsTunnel.PublicUrl}/webhook/whatsapp";
 
 Console.WriteLine($"Pushing webhook override to Meta: {callbackUri}");
 
-var metaUrl = $"https://graph.facebook.com/v21.0/{config.PhoneNumberId}";
+var metaUrl = $"https://graph.facebook.com/v26.0/{config.PhoneNumberId}";
 
 var payload = new
 {

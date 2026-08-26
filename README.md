@@ -76,7 +76,7 @@ New templates start in `PENDING` review status and can't be used until Meta appr
 
 ```powershell
 $token = "YOUR_ACCESS_TOKEN_HERE"
-Invoke-RestMethod -Uri "https://graph.facebook.com/v21.0/<whatsapp-business-account-id>/message_templates" -Headers @{ Authorization = "Bearer $token" } -Method Get
+Invoke-RestMethod -Uri "https://graph.facebook.com/v26.0/<whatsapp-business-account-id>/message_templates" -Headers @{ Authorization = "Bearer $token" } -Method Get
 ```
 Pipe `.data` through `Select-Object name, language, status, category | Format-Table` for a readable view. Use the WhatsApp Business Account ID here, not the Phone Number ID — they're different IDs and only the former works against this endpoint.
 
@@ -85,7 +85,7 @@ Both controller call sites into `IStaffNotifier` are wrapped in try/catch with `
 ## Stack
 
 - ASP.NET Core Web API, .NET 10
-- Meta WhatsApp Cloud API (Graph API `v21.0`, due for a bump to `v26.0` before Meta drops `v21.0` support)
+- Meta WhatsApp Cloud API (Graph API `v26.0` — bumped from `v21.0` in August 2026, ahead of `v21.0`'s January 21, 2027 retirement; see Meta's [Graph API version table](https://developers.facebook.com/docs/graph-api/changelog/versions/))
 - SQL Server 2025, accessed via **EF Core** (migrated from Dapper — see "Database & migrations" below for why and how)
 - Custom `ILoggerProvider` (`DatabaseLoggerProvider`/`DatabaseLogger` in `Logging/`) writes Warning-and-above log entries to the `ErrorLogs` table, fire-and-forget, so production errors are queryable instead of vanishing with the console
 - In-memory `ConcurrentDictionary` based conversation store (POC grade, see Roadmap)
@@ -352,7 +352,6 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 - [ ] **Query current WhatsApp messaging tier/usage** from the Graph API and surface it in the admin dashboard, so the 250-unique-customers-per-24h cap (see gotchas) can be watched proactively rather than discovered by hitting it.
 - [ ] **Ticket close functionality**: add a `CloseTicketAsync`-style method to `ITicketRepository`/`TicketRepository` (no way to change `Status` currently exists) and wire it to `PatchlabTicketing`'s existing "Close" action.
 - [ ] Replace manual `JsonElement` parsing of Meta's webhook payload with strongly typed DTOs and `TryGetProperty` guards throughout.
-- [ ] Bump Graph API calls from `v21.0` to `v26.0` before Meta removes `v21.0` support.
 - [ ] Switch this service's process-manager account off `LocalSystem`/equivalent to a dedicated least privilege account. Should happen before going live, does not affect day to day development.
 - [ ] Two-step name/surname prompt (or smarter splitting) — the current naive `Split(' ', 2)` in `HandleNameAsync` breaks compound first names (e.g. "De Wet van der Merwe" → FirstName "De").
 - [ ] Make the deploy pipeline's NSSM start-check tolerant of transient `SERVICE_START_PENDING` (short retry/wait loop instead of a single immediate check).
