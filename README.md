@@ -89,7 +89,7 @@ Both controller call sites into `IStaffNotifier` are wrapped in try/catch with `
 - SQL Server 2025, accessed via **EF Core** (migrated from Dapper — see "Database & migrations" below for why and how)
 - Custom `ILoggerProvider` (`DatabaseLoggerProvider`/`DatabaseLogger` in `Logging/`) writes Warning-and-above log entries to the `ErrorLogs` table, fire-and-forget, so production errors are queryable instead of vanishing with the console
 - In-memory `ConcurrentDictionary` based conversation store (POC grade, see Roadmap)
-- ngrok for local and production webhook tunneling
+- ngrok for local dev webhook tunneling only — production moved to Cloudflare Tunnel as of the MULTIPOINT server migration (August 2026); see "Production Infrastructure"
 - NSSM to run the bot as a Windows service in production (see "Deploying to a server" — this is the tooling currently in use, not a hard requirement of the project itself)
 
 ## Project structure
@@ -294,10 +294,15 @@ Copy `config-example.json` to `config.json` and fill in real values. `config.jso
 
 ## Deploying to a server
 
+> ⚠️ **CI/CD — NOT YET TESTED on the new server (MULTIPOINT).** The pipeline (`.github/workflows/deploy.yml`) was written and validated against the old shared prod machine. It has not been run end-to-end against MULTIPOINT — and as of August 26, 2026 it was just edited (the `PatchlabNgrokSync` stop/publish/start steps were removed, since Cloudflare Tunnel + a fixed domain makes that sync unnecessary — see "Production Infrastructure" below), so this is a genuinely unrun version of the pipeline, not just an unverified-on-new-hardware one. Before trusting it, verify on MULTIPOINT:
+> - The deploy step actually succeeds (publish completes, no path errors).
+> - The `PatchlabWhatsAppBot` NSSM service restarts cleanly and reaches `SERVICE_RUNNING` (the poll/retry logic exists for this — confirm it actually behaves the same way here as it did on the old machine).
+> - No path-related failures given MULTIPOINT's directory structure — in particular, watch for the same "paths with spaces break `sc.exe`/NSSM unpredictably" problem noted in Known Gotchas; confirm the publish folder and any NSSM `AppParameters` on this server don't hit it.
+
 The steps below are written generically since the exact hosting target may change — what matters is the shape of the deployment, not the specific tool. Whatever's used, it needs to satisfy four things: the app runs continuously as a background process, restarts automatically if it (or the machine) goes down, has a stable public HTTPS endpoint Meta can reach, and applies pending database migrations before serving new code.
 
 1. **Pick a process manager** to keep the app running as a background service rather than an interactive console app. On Windows, [NSSM](https://nssm.cc/) (currently in use) wraps any executable as a proper Windows service — install, point it at the published `.exe`, set it to auto-start, done. Any equivalent works (a native Windows Service, a systemd unit on Linux, a container orchestrator, etc.) — the app itself doesn't care, it's just `dotnet run`/a published executable underneath.
-   - **Gotcha:** NSSM can report `SERVICE_START_PENDING` momentarily on a start command even when the service comes up healthy seconds later. A deploy script that treats any non-`SERVICE_RUNNING` response as a hard failure will false-positive here — prefer a short retry/wait loop over a single immediate status check (see Roadmap).
+   - **Gotcha:** NSSM can report `SERVICE_START_PENDING` momentarily on a start command even when the service comes up healthy seconds later. A deploy script that treats any non-`SERVICE_RUNNING` response as a hard failure will false-positive here — prefer a short retry/wait loop over a single immediate status check. `deploy.yml`'s start steps already do this (poll `nssm status` until `SERVICE_RUNNING` or a timeout), but see the CI/CD warning above — that logic hasn't actually been exercised against MULTIPOINT yet.
 2. **Publish the app** to a stable folder the process manager points at:
    ```
    dotnet publish -c Release -o <publish folder>
@@ -308,12 +313,27 @@ The steps below are written generically since the exact hosting target may chang
    dotnet ef database update --connection "<that environment's connection string>"
    ```
    If running this against a published (not source) folder, `dotnet-ef` may need pointing directly at the built assembly rather than a project file — `--assembly <path-to-dll> --startup-assembly <path-to-dll>` instead of `--project`.
-5. **Expose a stable public HTTPS URL** Meta's webhook can reach. A tunnel (ngrok or similar) works for this without needing a public IP/domain of your own, provided something keeps the tunnel's URL in sync with what's registered in Meta's dashboard whenever it changes (see `PatchlabNgrokSync` under "Related projects").
+5. **Expose a stable public HTTPS URL** Meta's webhook can reach. A tunnel (ngrok or similar) works for this without needing a public IP/domain of your own, provided something keeps the tunnel's URL in sync with what's registered in Meta's dashboard whenever it changes — this was `PatchlabNgrokSync`'s job (see "Related projects"), needed because ngrok's free-tier URL changes on every restart. **Superseded in production** by Cloudflare Tunnel + a fixed domain as of the MULTIPOINT migration (see "Production Infrastructure" below) — a fixed domain never changes, so there's nothing left to sync. `PatchlabNgrokSync` is still valid for anyone tunneling with plain ngrok (e.g. local dev, or a future environment not on Cloudflare Tunnel).
 6. **Start the service.** Confirm it's actually healthy with a live request or log check — a process manager reporting "running" only means the process didn't crash on launch, not that it's serving correctly.
 
 **Automating the above (recommended once steps 1–6 have been done manually once):** a CI/CD pipeline triggered on push can run steps 2, 4, and 6 automatically — publish, apply pending migrations, restart the service — so that deploying a change is just a `git push`, with no manual file copying or SQL running on the target machine ever again. Two things worth knowing if setting this up on a self-hosted runner:
 - A tool installed via `dotnet tool install --global` during one pipeline step won't automatically be on `PATH` for the *next* step unless explicitly appended to the runner's path for the rest of that job.
 - If the runner is Windows-based, check which PowerShell is actually installed (`powershell` vs `pwsh` — the latter is PowerShell 7/Core and isn't guaranteed to be present) before writing pipeline steps that specify a shell explicitly.
+
+## Production Infrastructure
+
+*Current as of August 26, 2026 — describes what's actually running today. If you're reading this later and something here seems off, trust the server over this doc and update it.*
+
+The bot now runs on **MULTIPOINT**, migrated from the original shared dev-adjacent machine referenced elsewhere in this doc (some older passages — e.g. in "Deploying to a server" — still describe that generic/prior state; this section is the concrete, current one).
+
+**Public access — Cloudflare Tunnel, not ngrok:**
+- Runs as an NSSM service named `cftunnel`.
+- Config lives at `C:\PROGRA~2\CLOUDF~1\` — the short (8.3) path form is required here, not a style choice: `sc.exe`/NSSM on this OS mishandle paths containing spaces (the real path is under `C:\Program Files (x86)\Cloudflare\...`), so the short path is what actually has to go into service config. See Known Gotchas.
+- Tunnel ID: `4ca44b7b-f556-4d11-9242-fd3ddacc20d1`.
+- Routes: `ticketing.patchlab.co.za` (→ `PatchlabTicketing.Api`) and `bot.patchlab.co.za` (→ this bot's webhook).
+- Because these are fixed domains rather than a randomly-assigned tunnel URL, nothing needs to sync a changing address to Meta's webhook config anymore — this is what makes `PatchlabNgrokSync` obsolete in production (see "Deploying to a server" and "Related projects").
+
+**Bot logs:** NSSM's `AppStdout`/`AppStderr` are configured to write to `C:\bot-logs\stdout.log` and `C:\bot-logs\stderr.log`. Without setting those explicitly, NSSM captures nothing at all — see Known Gotchas.
 
 ## Related projects
 
@@ -323,7 +343,7 @@ The two apps do not talk to each other over HTTP. The database is the interface.
 
 Keeping the two apps separate means this bot stays narrowly scoped to "receive message, reply", and doesn't need redeploying just because dashboard UI changes.
 
-`PatchlabNgrokSync` is a small companion service that keeps a tunnelling provider's registered public URL in sync with Meta's Callback URL setting whenever the tunnel's address changes across restarts.
+`PatchlabNgrokSync` is a small companion service that keeps a tunnelling provider's registered public URL in sync with Meta's Callback URL setting whenever the tunnel's address changes across restarts. **Superseded in production** as of the MULTIPOINT/Cloudflare Tunnel migration (see "Production Infrastructure") — a fixed domain never changes, so there's nothing to sync. The project's source is still in this repo (not yet removed) and `deploy.yml`'s steps for it were dropped on August 26, 2026; it remains valid for any environment still tunneling via plain ngrok.
 
 ## Known gotchas
 
@@ -339,12 +359,37 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 - A process manager showing "Running" does not confirm health, verify with a live request or log check. NSSM specifically can also report a transient `SERVICE_START_PENDING` on start that resolves to healthy shortly after — don't treat that as a hard failure in automation.
 - A schema change made by hand directly against a database (rather than via `Add-Migration`) will desync EF's migration history from reality — the next real migration applied there may then conflict with what already exists. Keep all schema changes going through migrations once adopted, even "quick" ones.
 - Any secret pasted into a chat or AI session should be treated as compromised and rotated.
+- **Services created with `sc.exe`/NSSM need `AppStdout`/`AppStderr` set explicitly, or no logs are captured at all.** Neither tool captures console output by default — if a service seems to be silently failing with nothing to go on, check whether those were ever configured before assuming the problem is elsewhere.
+- **Paths containing spaces break `sc.exe` `binPath` and NSSM `AppParameters` unpredictably on this OS.** Don't rely on quoting to fix it — always use the short 8.3 path form instead (e.g. `C:\PROGRA~2\CLOUDF~1\` for `C:\Program Files (x86)\Cloudflare\...`). Get the short form via PowerShell: `(New-Object -ComObject Scripting.FileSystemObject).GetFolder("C:\Program Files (x86)\Cloudflare").ShortPath`.
+- **`w32tm`/`w32tm /query /status` reporting a successful time sync does NOT guarantee the system clock is actually correct.** Cross-check with a plain `Get-Date` against a known-good source before trusting it — this matters here because TLS/webhook signature validation and token expiry checks are all clock-sensitive.
+- **A Windows service stuck "marked for deletion"** (after deleting and immediately recreating a service with the same name) won't clear on its own no matter how many times you retry `sc delete`/`sc create` — every handle to the old service description has to close first. Reboot to clear it; don't keep fighting it with more delete/create attempts.
+
+## Incidents
+
+Dated postmortem entries — historical record of production issues and how they were actually resolved, kept separate from "Known gotchas" (which is evergreen advice) so future readers can tell what's a standing caveat versus a one-time event with a known root cause.
+
+### August 26, 2026 — Inbound WhatsApp messages not reaching the webhook, post-migration
+
+**Symptom:** after the MULTIPOINT/Cloudflare Tunnel migration, real inbound WhatsApp messages showed as delivered on the sender's phone but never reached the bot's webhook at all — no request, no log entry, nothing. Confusingly, Meta's App Dashboard "Test" button (which sends a synthetic webhook event) worked fine and reached the bot correctly, which pointed away from the actual cause for a while.
+
+**Root cause:** a **stale phone-number-level webhook override** — the `webhook_configuration` field on the phone number object itself via the Graph API, not the app-level webhook config — was still pointing at a dead ngrok URL from the old server setup. This override, when present, takes precedence over the app-level default callback URL for *real* inbound messages, but the Test button and the app-level config in the App Dashboard UI don't surface it at all — it's invisible from:
+- The App Dashboard's Webhooks/Configuration page,
+- `GET /{app-id}/subscribed_apps`,
+- The "Test" button (which appears to always hit the app-level default, not any phone-number-level override).
+
+**How to check for this:** `GET /{phone-number-id}?fields=webhook_configuration` via Graph API Explorer (or an equivalent authenticated request) — this is the only place the override actually shows up.
+
+**What did NOT fix it:**
+- Toggling the `messages` webhook field subscription off and back on in the App Dashboard.
+- Sending a fresh `POST` with `override_callback_uri` (the same mechanism `PatchlabNgrokSync` used to use) to try to overwrite it.
+
+**What did fix it:** fully **unsubscribing and re-subscribing** the `messages` webhook field from scratch in the App Dashboard's Configuration page — a real delete-and-re-add, not a toggle. Once re-added clean, real inbound messages started reaching the webhook immediately.
 
 ## Roadmap
 
 - [ ] **"Other clients" branch**, routing non LSF senders into existing client with an issue versus new client looking for something flows. Should be designed with the eventual manual takeover flow (now in `PatchlabTicketing`) in mind.
 - [ ] **GUI display of ticket photos** in `PatchlabTicketing` — `TicketPhotos` rows and the files under `TicketPhotos/` exist and are populated by this bot, but nothing on the dashboard side surfaces them yet. Deliberately out of scope here; a follow-up once this is deployed and confirmed working in production.
-- [ ] Actual server hosting environment for this bot (currently still on the original dev-adjacent machine) — migrate following the generic steps above once the target is chosen.
+- [ ] **Verify CI/CD against MULTIPOINT.** The server migration itself is done (see "Production Infrastructure"), but the deploy pipeline hasn't been run end-to-end against the new server yet — see the warning at the top of "Deploying to a server".
 - [ ] CI/CD deploy ordering flaw, a failed `dotnet publish` leaves the service stopped indefinitely with no alert. Applies to this project, `PatchlabNgrokSync`, and `PatchlabTicketing`.
 - [ ] Replace the in memory `ConversationStore` with persistent storage, it is currently wiped on every service restart.
 - [ ] Read and log Meta's error response body on send failures instead of letting `EnsureSuccessStatusCode()` throw blind.
@@ -354,7 +399,6 @@ Keeping the two apps separate means this bot stays narrowly scoped to "receive m
 - [ ] Replace manual `JsonElement` parsing of Meta's webhook payload with strongly typed DTOs and `TryGetProperty` guards throughout.
 - [ ] Switch this service's process-manager account off `LocalSystem`/equivalent to a dedicated least privilege account. Should happen before going live, does not affect day to day development.
 - [ ] Two-step name/surname prompt (or smarter splitting) — the current naive `Split(' ', 2)` in `HandleNameAsync` breaks compound first names (e.g. "De Wet van der Merwe" → FirstName "De").
-- [ ] Make the deploy pipeline's NSSM start-check tolerant of transient `SERVICE_START_PENDING` (short retry/wait loop instead of a single immediate check).
 - [ ] Remove the dead `MetaWhatsAppOptions.SectionName` code, cosmetic, low priority.
 - [ ] Delete the stray `PatchlabTwilioBot.csproj.Backup.tmp` file at the repo root.
 - [ ] Dapper cleanup, deliberately deferred until the rest of this list settles.
